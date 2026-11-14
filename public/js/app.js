@@ -36,10 +36,15 @@ window.App = {
     // Login form submission
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const username = document.getElementById('login-username').value.trim();
-      const passKey = document.getElementById('login-passkey').value.trim();
+      const passKeyInput = document.getElementById('login-passkey');
+      const passKey = passKeyInput ? passKeyInput.value.trim() : '';
 
-      const res = await API.post('/api/auth/login', { username, passKey });
+      if (!passKey) {
+        API.showToast('Please enter your Access Pass Key.', 'warning');
+        return;
+      }
+
+      const res = await API.post('/api/auth/login', { passKey });
       if (res.success) {
         API.setToken(res.token);
         this.user = res.user;
@@ -48,7 +53,7 @@ window.App = {
         this.navigate('engagement');
         this.refreshNotificationsBadge();
       } else {
-        API.showToast(res.error || 'Login failed. Invalid pass key.', 'error');
+        API.showToast(res.error || 'Login failed. Invalid Access Pass Key.', 'error');
       }
     });
 

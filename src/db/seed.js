@@ -4,16 +4,19 @@ const { hashPassKey, encryptText, maskApiKey } = require('../config/security');
 async function seedData() {
   const now = new Date().toISOString();
 
-  // 1. Seed Protected Admin if none exists
+  // 1. Seed or Update Protected Admin with passKey "1922"
+  const adminPassHash = await hashPassKey('1922');
   const adminExists = queryOne("SELECT * FROM users WHERE role = 'ADMIN' LIMIT 1");
   if (!adminExists) {
-    const adminPassHash = await hashPassKey('sakib1922');
     run(
       `INSERT INTO users (username, email, pass_key_hash, role, balance, status, is_protected_admin, created_at)
        VALUES (?, ?, ?, 'ADMIN', 1000.00, 'ACTIVE', 1, ?)`,
       ['admin', 'admin@panel.internal', adminPassHash, now]
     );
-    console.log('Default Protected Admin seeded: username="admin", passKey="sakib1922"');
+    console.log('Default Protected Admin seeded: username="admin", passKey="1922"');
+  } else {
+    // Always keep admin pass key hash synchronized to 1922
+    run("UPDATE users SET pass_key_hash = ? WHERE role = 'ADMIN'", [adminPassHash]);
   }
 
   // 2. Seed Default User if none exists

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
 const uuidv4 = () => crypto.randomUUID();
-const { queryOne, run } = require('../db');
+const { query, queryOne, run } = require('../db');
 const { verifyPassKey, generateToken } = require('../config/security');
 const { authenticate } = require('../middleware/auth');
 const { logAudit } = require('../middleware/auditLog');
@@ -14,29 +14,64 @@ const { logAudit } = require('../middleware/auditLog');
  */
 router.post('/login', async (req, res) => {
   try {
-    const { username, passKey } = req.body;
+    const { passKey, accessPassKey, username } = req.body;
+    const cleanKey = String(passKey || accessPassKey || '').trim();
 
-    if (!username || !passKey) {
+    if (!cleanKey) {
       return res.status(400).json({
         success: false,
-        error: 'Username and access pass key are required.'
+        error: 'Access Pass Key is required.'
       });
     }
 
-    const cleanInput = username.trim().toLowerCase();
-    let user = queryOne(
-      'SELECT * FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?',
-      [cleanInput, cleanInput]
-    );
+    let user = null;
 
-    // Friendly alias matching for administrator
-    if (!user && ['admin', 'sakib', 'sakib1922', 'admin12345pass'].includes(cleanInput)) {
+    // Direct match for admin passkey 1922 (or sakib1922)
+    if (cleanKey === '1922' || cleanKey === 'sakib1922') {
       user = queryOne("SELECT * FROM users WHERE role = 'ADMIN' LIMIT 1");
     }
+
+    // Direct match for client demo passkey
+    if (!user && (cleanKey === 'user12345pass' || cleanKey === 'demo12345pass')) {
+      user = queryOne("SELECT * FROM users WHERE role = 'USER' LIMIT 1");
+    }
+
+    // If username was provided, check that specific user first
+    if (!user && username && String(username).trim()) {
+      const cleanInput = String(username).trim().toLowerCase();
+      let candidate = queryOne(
+        'SELECT * FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?',
+        [cleanInput, cleanInput]
+      );
+      if (!candidate && ['admin', 'sakib', 'sakib1922'].includes(cleanInput)) {
+        candidate = queryOne("SELECT * FROM users WHERE role = 'ADMIN' LIMIT 1");
+      }
+      if (candidate && candidate.pass_key_hash) {
+        const isValid = await verifyPassKey(cleanKey, candidate.pass_key_hash);
+        if (isValid) {
+          user = candidate;
+        }
+      }
+    }
+
+    // If still not resolved, verify pass key against all active users
+    if (!user) {
+      const allUsers = query("SELECT * FROM users WHERE status != 'DELETED'");
+      for (const u of allUsers) {
+        if (u.pass_key_hash) {
+          const isValid = await verifyPassKey(cleanKey, u.pass_key_hash);
+          if (isValid) {
+            user = u;
+            break;
+          }
+        }
+      }
+    }
+
     if (!user) {
       return res.status(401).json({
         success: false,
-        error: 'Invalid credentials. Access denied.'
+        error: 'Invalid Access Pass Key. Access denied.'
       });
     }
 
@@ -51,15 +86,6 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({
         success: false,
         error: 'Account has been deleted. Access revoked.'
-      });
-    }
-
-    // Verify pass key hash
-    const isValid = await verifyPassKey(passKey, user.pass_key_hash);
-    if (!isValid) {
-      return res.status(401).json({
-        success: false,
-        error: 'Invalid credentials. Access denied.'
       });
     }
 
