@@ -19,6 +19,15 @@ const API = {
     const container = document.getElementById('toast-container');
     if (!container) return;
 
+    // Deduplicate: Don't show identical message if already visible
+    const existing = Array.from(container.children).find(t => t.textContent.includes(message));
+    if (existing) return;
+
+    // Limit maximum active toasts to 3
+    while (container.children.length >= 3) {
+      container.removeChild(container.firstChild);
+    }
+
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     toast.innerHTML = `
