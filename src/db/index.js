@@ -1,6 +1,11 @@
 const fs = require('fs');
 const path = require('path');
-const initSqlJs = require('sql.js');
+let initSqlJs;
+try {
+  initSqlJs = require('sql.js/dist/sql-wasm-inline.js');
+} catch (e) {
+  initSqlJs = require('sql.js');
+}
 const env = require('../config/env');
 const { SCHEMA_SQL } = require('./schema');
 

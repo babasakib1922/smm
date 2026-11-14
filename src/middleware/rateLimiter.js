@@ -1,7 +1,7 @@
 const rateLimitMap = new Map();
 
-// Clean up stale rate limits every 5 minutes
-setInterval(() => {
+// Clean up stale rate limits every 5 minutes (unref so it doesn't hold serverless event loop)
+const cleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [key, data] of rateLimitMap.entries()) {
     if (now > data.resetTime) {
@@ -9,6 +9,9 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1000);
+if (cleanupTimer && cleanupTimer.unref) {
+  cleanupTimer.unref();
+}
 
 /**
  * Basic rate limiter middleware

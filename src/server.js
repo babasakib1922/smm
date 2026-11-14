@@ -23,12 +23,40 @@ const adminSettingsRoutes = require('./routes/adminSettingsRoutes');
 
 const app = express();
 
+let isDbReady = false;
+let initPromise = null;
+
+async function ensureDbReady() {
+  if (isDbReady) return;
+  if (!initPromise) {
+    initPromise = (async () => {
+      console.log('[Server] Initializing database...');
+      await initDB();
+      console.log('[Server] Checking and seeding default records...');
+      await seedData();
+      isDbReady = true;
+    })();
+  }
+  await initPromise;
+}
+
 // Global Middlewares
 app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(rateLimiter(200, 60 * 1000)); // 200 requests per minute per IP
+
+// Ensure database is ready before any route/request is handled
+app.use(async (req, res, next) => {
+  try {
+    await ensureDbReady();
+    next();
+  } catch (err) {
+    console.error('[Server] DB initialization error:', err);
+    res.status(500).json({ error: 'Database initialization failed: ' + err.message });
+  }
+});
 
 // Serve static assets from public/
 app.use(express.static(path.join(__dirname, '../public')));
@@ -63,14 +91,12 @@ app.use((req, res) => {
 // Server Initialization
 async function startServer() {
   try {
-    console.log('[Server] Initializing database...');
-    await initDB();
+    await ensureDbReady();
 
-    console.log('[Server] Checking and seeding default records...');
-    await seedData();
-
-    console.log('[Server] Starting backend automation engine...');
-    startAutomationEngine();
+    if (!env.IS_VERCEL) {
+      console.log('[Server] Starting backend automation engine...');
+      startAutomationEngine();
+    }
 
     const server = app.listen(env.PORT, () => {
       console.log(`====================================================`);
@@ -93,8 +119,7 @@ if (require.main === module) {
   startServer();
 }
 
-module.exports = {
-  app,
-  startServer
-};
+module.exports = app;
+module.exports.app = app;
+module.exports.startServer = startServer;
 
