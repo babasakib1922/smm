@@ -1,0 +1,26 @@
+{
+  "name": "nexus-smm-automation-panel",
+  "version": "2.4.0",
+  "description": "Enterprise SMM Automation, Private Access Pass Key Portal, and Exact Package Batch Scheduler",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node tests/testSuite.js",
+    "test:http": "node tests/apiHttpTest.js",
+    "seed": "node -e \"require('./src/db').initDB().then(() => require('./src/db/seed').seedData())\""
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "csv-parse": "^7.0.3",
+    "csv-stringify": "^6.9.0",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "isomorphic-git": "^1.44.13",
+    "jsonwebtoken": "^9.0.3",
+    "sql.js": "^1.16.0",
+    "uuid": "^14.0.3",
+    "zod": "^4.6.7"
+  }
+}

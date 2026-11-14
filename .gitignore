@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Environment and sensitive secrets
+.env
+
+# Database backups & temp files
+data/*.tmp
+*.sqlite.tmp
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+

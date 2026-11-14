@@ -1,0 +1,167 @@
+const crypto = require('crypto');
+const uuidv4 = () => crypto.randomUUID();
+const { queryOne, run, transaction } = require('../db');
+const { decryptText } = require('../config/security');
+const { getProviderAdapter } = require('./apiAdapter');
+const { sendNotification } = require('./notificationService');
+
+/**
+ * Validate URL strictly
+ */
+function isValidUrl(urlString) {
+  try {
+    const url = new URL(urlString);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Create a new single order with transaction-safe balance deduction and idempotency
+ */
+async function createOrder({
+  userId,
+  serviceId,
+  targetUrl,
+  quantity,
+  idempotencyKey = null,
+  campaignBatchId = null
+}) {
+  // 1. Validate inputs
+  if (!isValidUrl(targetUrl)) {
+    throw new Error('Invalid target URL. Must be a valid http or https URL.');
+  }
+
+  const parsedQty = parseInt(quantity, 10);
+  if (isNaN(parsedQty) || parsedQty <= 0) {
+    throw new Error('Quantity must be a positive integer.');
+  }
+
+  // 2. Fetch service
+  const service = queryOne('SELECT * FROM services WHERE id = ? AND is_active = 1', [serviceId]);
+  if (!service) {
+    throw new Error('Selected service is not active or does not exist.');
+  }
+
+  // Check service limits
+  if (parsedQty < service.min_quantity) {
+    throw new Error(`Quantity below minimum limit of ${service.min_quantity.toLocaleString()}.`);
+  }
+  if (parsedQty > service.max_quantity) {
+    throw new Error(`Quantity exceeds maximum limit of ${service.max_quantity.toLocaleString()}.`);
+  }
+
+  // Calculate charge: (quantity / 1000) * price_per_k
+  const charge = parseFloat(((parsedQty / 1000) * service.price_per_k).toFixed(4));
+
+  // 3. Check idempotency: prevent accidental duplicate submission
+  const finalIdempotencyKey = idempotencyKey || `IDEM-${uuidv4()}`;
+  const existingOrder = queryOne('SELECT * FROM orders WHERE idempotency_key = ?', [finalIdempotencyKey]);
+  if (existingOrder) {
+    console.log(`[Idempotency] Order already processed for key ${finalIdempotencyKey}: ${existingOrder.id}`);
+    return existingOrder;
+  }
+
+  // 4. Fetch provider
+  const provider = queryOne('SELECT * FROM api_providers WHERE id = ?', [service.provider_id]);
+  if (!provider || !provider.is_active) {
+    throw new Error('API provider for this service is currently disabled or unavailable.');
+  }
+
+  // 5. Fetch user credentials for this provider
+  const userCred = queryOne(
+    'SELECT * FROM user_api_credentials WHERE user_id = ? AND provider_id = ?',
+    [userId, provider.id]
+  );
+  let apiKey = '';
+  if (userCred && userCred.encrypted_api_key) {
+    apiKey = decryptText(userCred.encrypted_api_key, userCred.iv, userCred.auth_tag);
+  }
+
+  // If user has not connected credentials, check if provider is mock or fallback
+  if (!apiKey) {
+    if (provider.slug === 'mock-provider') {
+      apiKey = 'mock_key_default';
+    } else {
+      throw new Error(`You must connect your ${provider.name} API credentials in the API Management or Engagement tab before submitting orders.`);
+    }
+  }
+
+  // 6. Execute order record creation (Free tool - no internal wallet deduction)
+  const orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const now = new Date().toISOString();
+
+  let createdOrder = null;
+  transaction((tx) => {
+    const user = tx.queryOne('SELECT status FROM users WHERE id = ?', [userId]);
+    if (!user || user.status !== 'ACTIVE') {
+      throw new Error('User account is not active.');
+    }
+
+    // Insert order record
+    tx.run(
+      `INSERT INTO orders (id, user_id, service_id, target_url, quantity, charge, status, provider_id, idempotency_key, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, ?)`,
+      [orderId, userId, service.id, targetUrl, parsedQty, charge, provider.id, finalIdempotencyKey, now, now]
+    );
+
+    createdOrder = tx.queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+  });
+
+  // 7. Dispatch to provider API
+  let providerOrderId = null;
+  let providerResponse = null;
+  let orderStatus = 'Processing';
+
+  try {
+    const adapter = getProviderAdapter(provider, apiKey);
+    const apiRes = await adapter.createOrder({
+      serviceId: service.provider_service_id,
+      link: targetUrl,
+      quantity: parsedQty
+    }, orderId);
+
+    providerOrderId = apiRes.providerOrderId;
+    providerResponse = JSON.stringify(apiRes.raw);
+    orderStatus = 'In progress';
+
+    // Update order with provider details
+    run(
+      `UPDATE orders SET provider_order_id = ?, provider_response = ?, status = ?, updated_at = ? WHERE id = ?`,
+      [providerOrderId, providerResponse, orderStatus, new Date().toISOString(), orderId]
+    );
+
+    sendNotification({
+      userId,
+      title: 'Order Submitted',
+      message: `Your order #${orderId} (${parsedQty.toLocaleString()} units) was submitted to provider.`,
+      type: 'SUCCESS'
+    });
+
+  } catch (apiErr) {
+    console.error(`[Order Dispatch Error] Order ${orderId}:`, apiErr.message);
+    orderStatus = 'Failed';
+    providerResponse = JSON.stringify({ error: apiErr.message, code: apiErr.code });
+
+    run(
+      `UPDATE orders SET provider_response = ?, status = 'Failed', updated_at = ? WHERE id = ?`,
+      [providerResponse, new Date().toISOString(), orderId]
+    );
+
+    sendNotification({
+      userId,
+      title: 'Order Dispatch Failed',
+      message: `Order #${orderId} submission failed: ${apiErr.message}`,
+      type: 'ERROR'
+    });
+  }
+
+  return queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+}
+
+module.exports = {
+  isValidUrl,
+  createOrder
+};
+
