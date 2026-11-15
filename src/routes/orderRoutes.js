@@ -245,6 +245,43 @@ router.post('/:id/cancel', authenticate, async (req, res) => {
 });
 
 /**
+ * DELETE /api/orders/all
+ * Clear all orders (Admin clears all; standard users clear their own)
+ */
+const handleClearOrders = async (req, res) => {
+  try {
+    const isAdmin = req.user.role === 'ADMIN';
+
+    run('PRAGMA foreign_keys = OFF');
+    if (isAdmin) {
+      run('UPDATE campaign_batches SET order_id = NULL');
+      run('DELETE FROM orders');
+    } else {
+      run('UPDATE campaign_batches SET order_id = NULL WHERE campaign_id IN (SELECT id FROM campaigns WHERE user_id = ?)', [req.user.id]);
+      run('DELETE FROM orders WHERE user_id = ?', [req.user.id]);
+    }
+    run('PRAGMA foreign_keys = ON');
+
+    logAudit(req.user.id, 'CLEAR_ORDERS', 'orders', 'all', { role: req.user.role }, req);
+
+    try {
+      await pushToCloud();
+    } catch (_) {}
+
+    return res.json({
+      success: true,
+      message: 'All orders have been cleared successfully.'
+    });
+  } catch (err) {
+    console.error('Clear orders error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to clear orders: ' + err.message });
+  }
+};
+
+router.delete('/all', authenticate, handleClearOrders);
+router.post('/clear-all', authenticate, handleClearOrders);
+
+/**
  * GET /api/orders/:id
  * Order details
  */

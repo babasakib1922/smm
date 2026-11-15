@@ -8,7 +8,8 @@ window.OrderHistoryComponent = {
           <h2>Order System</h2>
           <p>Track your submitted orders, delivery statuses, and provider confirmations</p>
         </div>
-        <div style="display: flex; gap: 10px; align-items: center;">
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+          ${App.user && App.user.role === 'ADMIN' ? '<button id="clear-orders-btn" class="btn btn-sm" onclick="OrderHistoryComponent.clearAllOrders()" style="background: rgba(239, 68, 68, 0.12); color: #dc2626; border: 1px solid rgba(239, 68, 68, 0.3); font-weight: 600;">🗑️ Clear All Orders</button>' : ''}
           <button id="refresh-orders-btn" class="btn btn-secondary btn-sm" onclick="OrderHistoryComponent.syncOrders()">🔄 Refresh Live Status</button>
           <a href="/api/export/orders" class="btn btn-secondary btn-sm" target="_blank">📥 Export (CSV/Excel)</a>
           <button class="btn btn-primary btn-sm" onclick="App.navigate('engagement')">⚡ New Engagement</button>
@@ -98,6 +99,18 @@ window.OrderHistoryComponent = {
       this.loadOrders(1);
     } else {
       API.showToast(res.error || 'Failed to cancel order.', 'error');
+    }
+  },
+
+  async clearAllOrders() {
+    if (!confirm('Are you sure you want to clear all orders from history? This action cannot be undone.')) return;
+    API.showToast('Clearing all orders...', 'info');
+    const res = await API.delete('/api/orders/all');
+    if (res.success) {
+      API.showToast(res.message || 'All orders cleared successfully.', 'success');
+      this.loadOrders(1);
+    } else {
+      API.showToast(res.error || 'Failed to clear orders.', 'error');
     }
   },
 

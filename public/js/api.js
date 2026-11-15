@@ -110,6 +110,10 @@ const API = {
     return this.request(endpoint, {
       method: 'DELETE'
     });
+  },
+
+  delete(endpoint) {
+    return this.del(endpoint);
   }
 };
 

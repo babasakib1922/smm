@@ -28,6 +28,8 @@ async function pullFromCloud(force = false) {
     const gist = await res.json();
     if (!gist.files) return;
 
+    run('PRAGMA foreign_keys = OFF');
+
     // 1. Sync Users
     if (gist.files['users.json']) {
       const data = JSON.parse(gist.files['users.json'].content || '{}');
@@ -114,6 +116,16 @@ async function pullFromCloud(force = false) {
     if (gist.files['orders.json']) {
       const orderData = JSON.parse(gist.files['orders.json'].content || '{}');
       const orders = orderData.orders || [];
+      const cloudOrderIds = new Set(orders.map(o => o.id));
+
+      // Remove any local orders that were deleted in cloud
+      const localOrders = query('SELECT id FROM orders');
+      for (const lo of localOrders) {
+        if (!cloudOrderIds.has(lo.id)) {
+          run('UPDATE campaign_batches SET order_id = NULL WHERE order_id = ?', [lo.id]);
+          run('DELETE FROM orders WHERE id = ?', [lo.id]);
+        }
+      }
 
       for (const o of orders) {
         run(
@@ -183,6 +195,8 @@ async function pullFromCloud(force = false) {
     lastPullTime = Date.now();
   } catch (err) {
     console.error('[CloudSync Pull Error]', err.message);
+  } finally {
+    try { run('PRAGMA foreign_keys = ON'); } catch (_) {}
   }
 }
 
@@ -216,9 +230,7 @@ async function pushToCloud() {
     if (campaigns.length > 0) {
       filesToPatch['campaigns.json'] = { content: JSON.stringify(campaignsPayload, null, 2) };
     }
-    if (orders.length > 0) {
-      filesToPatch['orders.json'] = { content: JSON.stringify(ordersPayload, null, 2) };
-    }
+    filesToPatch['orders.json'] = { content: JSON.stringify(ordersPayload, null, 2) };
     // Only push credentials if local has credentials or mappings, so a blank cold container never wipes out credentials
     if (credentials.length > 0 || mappings.length > 0) {
       filesToPatch['credentials.json'] = { content: JSON.stringify(credentialsPayload, null, 2) };
