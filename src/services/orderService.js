@@ -63,17 +63,64 @@ async function createOrder({
     return existingOrder;
   }
 
-  // 4. Fetch provider
-  const provider = queryOne('SELECT * FROM api_providers WHERE id = ?', [service.provider_id]);
+  // 4. Resolve Provider, Service ID, and API Credentials
+  // Prefer user's configured mapping in user_service_mappings, or user's connected provider
+  let provider = queryOne('SELECT * FROM api_providers WHERE id = ?', [service.provider_id]);
+  let providerServiceId = service.provider_service_id;
+
+  const serviceCategory = (service.category || 'views').toLowerCase();
+  const serviceType = serviceCategory.includes('like') ? 'likes' : (serviceCategory.includes('save') ? 'saves' : (serviceCategory.includes('share') ? 'shares' : 'views'));
+
+  // A. Check if user has an explicit mapping for this service type
+  const userMapping = queryOne(
+    "SELECT * FROM user_service_mappings WHERE user_id = ? AND service_type = ? AND is_enabled = 1",
+    [userId, serviceType]
+  );
+
+  let userCred = null;
+
+  if (userMapping) {
+    const mappedCred = queryOne(
+      'SELECT * FROM user_api_credentials WHERE user_id = ? AND provider_id = ? AND connection_status = "CONNECTED"',
+      [userId, userMapping.provider_id]
+    );
+    if (mappedCred) {
+      const mappedProvider = queryOne('SELECT * FROM api_providers WHERE id = ? AND is_active = 1', [userMapping.provider_id]);
+      if (mappedProvider) {
+        provider = mappedProvider;
+        providerServiceId = userMapping.provider_service_id || providerServiceId;
+        userCred = mappedCred;
+      }
+    }
+  }
+
+  // B. If not resolved from mapping, check credentials for default service provider
+  if (!userCred && provider) {
+    userCred = queryOne(
+      'SELECT * FROM user_api_credentials WHERE user_id = ? AND provider_id = ? AND connection_status = "CONNECTED"',
+      [userId, provider.id]
+    );
+  }
+
+  // C. Fallback: If user has ANY connected credential and the default provider is not connected:
+  if (!userCred) {
+    const anyCred = queryOne(
+      'SELECT * FROM user_api_credentials WHERE user_id = ? AND connection_status = "CONNECTED" ORDER BY id DESC LIMIT 1',
+      [userId]
+    );
+    if (anyCred) {
+      const anyProvider = queryOne('SELECT * FROM api_providers WHERE id = ? AND is_active = 1', [anyCred.provider_id]);
+      if (anyProvider) {
+        provider = anyProvider;
+        userCred = anyCred;
+      }
+    }
+  }
+
   if (!provider || !provider.is_active) {
     throw new Error('API provider for this service is currently disabled or unavailable.');
   }
 
-  // 5. Fetch user credentials for this provider
-  const userCred = queryOne(
-    'SELECT * FROM user_api_credentials WHERE user_id = ? AND provider_id = ?',
-    [userId, provider.id]
-  );
   let apiKey = '';
   if (userCred && userCred.encrypted_api_key) {
     apiKey = decryptText(userCred.encrypted_api_key, userCred.iv, userCred.auth_tag);
@@ -117,7 +164,7 @@ async function createOrder({
   try {
     const adapter = getProviderAdapter(provider, apiKey);
     const apiRes = await adapter.createOrder({
-      serviceId: service.provider_service_id,
+      serviceId: providerServiceId,
       link: targetUrl,
       quantity: parsedQty
     }, orderId);

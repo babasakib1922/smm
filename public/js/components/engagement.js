@@ -973,18 +973,37 @@ window.EngagementComponent = {
                 <td>Batch ${b.batch_number}</td>
                 <td><strong>${b.planned_quantity.toLocaleString()}</strong></td>
                 <td>${new Date(b.scheduled_at).toLocaleTimeString()}</td>
-                <td><span class="status-pill ${b.status.toLowerCase()}">${b.status}</span></td>
-                <td><code style="font-size: 11px;">${b.provider_order_id || 'Queued'}</code></td>
+                <td>
+                  <span class="status-pill ${b.status.toLowerCase()}">${b.status}</span>
+                  ${b.last_error ? `<span title="${b.last_error}" style="color: #ef4444; font-size: 11px; margin-left: 6px; cursor: help;">⚠️ Error</span>` : ''}
+                </td>
+                <td><code style="font-size: 11px;">${b.provider_order_id ? `#${b.provider_order_id}` : (b.last_error ? 'Retry pending' : 'Queued')}</code></td>
               </tr>
             `).join('')}
           </tbody>
         </table>
       </div>
 
-      <div style="display: flex; justify-content: flex-end; margin-top: 18px;">
-        <button class="btn btn-secondary" onclick="App.closeModal()">Close</button>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 18px; flex-wrap: wrap; gap: 10px;">
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-primary btn-sm" onclick="EngagementComponent.dispatchCampaignNow('${campaign.id}')">⚡ Dispatch Due Batches Now</button>
+          ${['Scheduled', 'Running', 'Paused'].includes(campaign.status) ? `<button class="btn btn-danger btn-sm" onclick="EngagementComponent.updateCampaignStatus('${campaign.id}', 'Cancelled')" style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3);">Cancel Campaign</button>` : ''}
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="App.closeModal()">Close</button>
       </div>
     `);
+  },
+
+  async dispatchCampaignNow(campaignId) {
+    API.showToast('Executing due campaign batches...', 'info');
+    const res = await API.post(`/api/scheduler/campaigns/${campaignId}/dispatch`);
+    if (res.success) {
+      API.showToast(res.message || 'Dispatch completed.', 'success');
+      this.viewCampaignDetails(campaignId);
+      this.loadUserCampaigns();
+    } else {
+      API.showToast(res.error || 'Failed to dispatch: ' + res.error, 'error');
+    }
   }
 };
 

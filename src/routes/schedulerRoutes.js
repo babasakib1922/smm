@@ -373,16 +373,24 @@ router.get('/campaigns', authenticate, async (req, res) => {
  * GET /api/scheduler/campaigns/:id
  * Get campaign details with full batch list and execution status
  */
-router.get('/campaigns/:id', authenticate, (req, res) => {
+router.get('/campaigns/:id', authenticate, async (req, res) => {
   try {
     const campaignId = req.params.id;
     const isAdmin = req.user.role === 'ADMIN';
 
+    // Synchronize cloud state and process any due batches
+    try {
+      await pullFromCloud();
+      await runWorkerA();
+      await runWorkerB();
+      await pushToCloud();
+    } catch (e) {}
+
     let sql = `
       SELECT c.*, p.name as package_name, s.name as service_name, u.username as user_name
       FROM campaigns c
-      JOIN packages p ON c.package_id = p.id
-      JOIN services s ON c.service_id = s.id
+      LEFT JOIN packages p ON c.package_id = p.id
+      LEFT JOIN services s ON c.service_id = s.id
       JOIN users u ON c.user_id = u.id
       WHERE c.id = ?
     `;
@@ -393,7 +401,12 @@ router.get('/campaigns/:id', authenticate, (req, res) => {
       params.push(req.user.id);
     }
 
-    const campaign = queryOne(sql, params);
+    let campaign = queryOne(sql, params);
+    if (!campaign) {
+      await pullFromCloud(true);
+      campaign = queryOne(sql, params);
+    }
+
     if (!campaign) {
       return res.status(404).json({ success: false, error: 'Campaign not found.' });
     }
@@ -421,6 +434,34 @@ router.get('/campaigns/:id', authenticate, (req, res) => {
   } catch (err) {
     console.error('Get campaign error:', err);
     return res.status(500).json({ success: false, error: 'Failed to retrieve campaign details.' });
+  }
+});
+
+/**
+ * POST /api/scheduler/campaigns/:id/dispatch
+ * Manually trigger dispatch of any due batches for this campaign
+ */
+router.post('/campaigns/:id/dispatch', authenticate, async (req, res) => {
+  try {
+    const campaignId = req.params.id;
+    await pullFromCloud();
+    await runWorkerA();
+    await runWorkerB();
+    await pushToCloud();
+
+    const batches = query(
+      'SELECT * FROM campaign_batches WHERE campaign_id = ? ORDER BY batch_number ASC',
+      [campaignId]
+    );
+
+    return res.json({
+      success: true,
+      message: 'Batch dispatch cycle completed.',
+      batches
+    });
+  } catch (err) {
+    console.error('Dispatch error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to dispatch: ' + err.message });
   }
 });
 
