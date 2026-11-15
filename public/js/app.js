@@ -110,7 +110,7 @@ window.App = {
       this._heartbeatInterval = setInterval(async () => {
         if (API.getToken()) {
           try {
-            await fetch('/api/scheduler/cron').catch(() => {});
+            await fetch('/api/cron').catch(() => {});
           } catch (_) {}
         }
       }, 30000);

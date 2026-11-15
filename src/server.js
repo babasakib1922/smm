@@ -89,6 +89,25 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Automation cron endpoint (callable by Vercel Cron or external monitors)
+app.get(['/api/cron', '/api/scheduler/cron'], async (req, res) => {
+  try {
+    const { pullFromCloud, pushToCloud } = require('./services/cloudSync');
+    const { runWorkerA, runWorkerB } = require('./services/automationEngine');
+    await pullFromCloud();
+    await runWorkerA();
+    await runWorkerB();
+    await pushToCloud();
+    return res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      message: 'Automation cron cycle executed successfully.'
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Single Page Application (SPA) routing fallback
 app.use((req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
