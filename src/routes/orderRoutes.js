@@ -1,9 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { query, queryOne } = require('../db');
+const { query, queryOne, run } = require('../db');
 const { authenticate } = require('../middleware/auth');
 const { createOrder } = require('../services/orderService');
 const { logAudit } = require('../middleware/auditLog');
+const { sendNotification } = require('../services/notificationService');
+const { pullFromCloud, pushToCloud } = require('../services/cloudSync');
+const { runStatusSync } = require('../services/automationEngine');
 
 /**
  * POST /api/orders
@@ -30,6 +33,9 @@ router.post('/', authenticate, async (req, res) => {
 
     logAudit(req.user.id, 'CREATE_ORDER', 'orders', order.id, { serviceId, quantity, charge: order.charge }, req);
 
+    // Persist new order to cloud state immediately
+    await pushToCloud();
+
     return res.status(201).json({
       success: true,
       message: `Order #${order.id} created successfully.`,
@@ -46,8 +52,16 @@ router.post('/', authenticate, async (req, res) => {
  * List orders with search, status filter, date range, pagination
  * Users only see their own orders; Admins can see all orders or filter by user
  */
-router.get('/', authenticate, (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   try {
+    // 1. Sync orders across serverless instances and update live provider statuses
+    try {
+      await pullFromCloud();
+      await runStatusSync();
+    } catch (syncErr) {
+      // Non-blocking
+    }
+
     const { search, status, startDate, endDate, userId, page = 1, limit = 20 } = req.query;
     const isAdmin = req.user.role === 'ADMIN';
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
@@ -147,6 +161,86 @@ router.get('/', authenticate, (req, res) => {
   } catch (err) {
     console.error('List orders error:', err);
     return res.status(500).json({ success: false, error: 'Failed to retrieve orders.' });
+  }
+});
+
+/**
+ * POST /api/orders/sync
+ * Manually trigger live status synchronization with SMM providers
+ */
+router.post('/sync', authenticate, async (req, res) => {
+  try {
+    await pullFromCloud(true);
+    await runStatusSync();
+    await pushToCloud();
+    return res.json({ success: true, message: 'Orders synchronized with providers.' });
+  } catch (err) {
+    console.error('Sync orders error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to sync orders.' });
+  }
+});
+
+/**
+ * POST /api/orders/:id/cancel
+ * Cancel an order anytime
+ */
+router.post('/:id/cancel', authenticate, async (req, res) => {
+  try {
+    const orderId = req.params.id;
+    const isAdmin = req.user.role === 'ADMIN';
+
+    let order = queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+    if (!order) {
+      await pullFromCloud(true);
+      order = queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+    }
+
+    if (!order) {
+      return res.status(404).json({ success: false, error: 'Order not found.' });
+    }
+
+    // Access check: Only owner or ADMIN can cancel
+    if (!isAdmin && order.user_id !== req.user.id) {
+      return res.status(403).json({ success: false, error: 'Access denied. You cannot cancel this order.' });
+    }
+
+    if (order.status === 'Canceled') {
+      return res.json({
+        success: true,
+        message: `Order #${orderId} is already canceled.`,
+        order
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+
+    // Update order status to 'Canceled'
+    run("UPDATE orders SET status = 'Canceled', updated_at = ? WHERE id = ?", [nowIso, orderId]);
+
+    // If order was part of a campaign batch, update batch status as well
+    run("UPDATE campaign_batches SET status = 'Cancelled' WHERE order_id = ?", [orderId]);
+
+    logAudit(req.user.id, 'CANCEL_ORDER', 'orders', orderId, { previousStatus: order.status }, req);
+
+    sendNotification({
+      userId: order.user_id,
+      title: 'Order Canceled',
+      message: `Order #${orderId} was canceled successfully.`,
+      type: 'INFO'
+    });
+
+    // Synchronize to cloud state
+    await pushToCloud();
+
+    const updatedOrder = queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+    return res.json({
+      success: true,
+      message: `Order #${orderId} has been canceled successfully.`,
+      order: updatedOrder
+    });
+  } catch (err) {
+    console.error('Cancel order error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to cancel order: ' + err.message });
   }
 });
 

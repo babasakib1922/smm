@@ -8,7 +8,8 @@ window.OrderHistoryComponent = {
           <h2>Order System</h2>
           <p>Track your submitted orders, delivery statuses, and provider confirmations</p>
         </div>
-        <div style="display: flex; gap: 10px;">
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <button id="refresh-orders-btn" class="btn btn-secondary btn-sm" onclick="OrderHistoryComponent.syncOrders()">🔄 Refresh Live Status</button>
           <a href="/api/export/orders" class="btn btn-secondary btn-sm" target="_blank">📥 Export (CSV/Excel)</a>
           <button class="btn btn-primary btn-sm" onclick="App.navigate('engagement')">⚡ New Engagement</button>
         </div>
@@ -80,6 +81,26 @@ window.OrderHistoryComponent = {
     this.loadOrders(1);
   },
 
+  async syncOrders() {
+    API.showToast('Checking latest delivery status with provider APIs...', 'info');
+    await API.post('/api/orders/sync');
+    await this.loadOrders(1);
+    API.showToast('Order statuses synchronized.', 'success');
+  },
+
+  async cancelOrder(orderId) {
+    if (!confirm(`Are you sure you want to cancel order #${orderId}?`)) return;
+    API.showToast(`Canceling order #${orderId}...`, 'info');
+    const res = await API.post(`/api/orders/${orderId}/cancel`);
+    if (res.success) {
+      API.showToast(res.message || `Order #${orderId} canceled successfully.`, 'success');
+      App.closeModal();
+      this.loadOrders(1);
+    } else {
+      API.showToast(res.error || 'Failed to cancel order.', 'error');
+    }
+  },
+
   async loadOrders(page = 1) {
     const search = document.getElementById('order-filter-search').value.trim();
     const status = document.getElementById('order-filter-status').value;
@@ -119,7 +140,10 @@ window.OrderHistoryComponent = {
         <td style="font-family: monospace; font-size: 11px;">${o.provider_order_id || '-'}</td>
         <td style="font-size: 12px; color: var(--text-muted);">${new Date(o.created_at).toLocaleString()}</td>
         <td>
-          <button class="btn btn-secondary btn-sm" onclick="OrderHistoryComponent.showDetail('${o.id}')">View</button>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <button class="btn btn-secondary btn-sm" onclick="OrderHistoryComponent.showDetail('${o.id}')">View</button>
+            ${o.status !== 'Canceled' ? `<button class="btn btn-sm" onclick="OrderHistoryComponent.cancelOrder('${o.id}')" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); font-weight: 600; cursor: pointer; padding: 4px 8px; border-radius: 6px;">Cancel</button>` : ''}
+          </div>
         </td>
       </tr>
     `).join('');
@@ -172,7 +196,8 @@ window.OrderHistoryComponent = {
           <span>${new Date(o.updated_at).toLocaleString()}</span>
         </div>
       </div>
-      <div style="display: flex; justify-content: flex-end;">
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        ${o.status !== 'Canceled' ? `<button class="btn btn-danger" onclick="OrderHistoryComponent.cancelOrder('${o.id}')" style="background: #ef4444; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600;">Cancel Order</button>` : ''}
         <button class="btn btn-secondary" onclick="App.closeModal()">Close</button>
       </div>
     `);

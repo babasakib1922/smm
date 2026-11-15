@@ -11,6 +11,8 @@ const {
 } = require('../services/schedulerEngine');
 const { logAudit } = require('../middleware/auditLog');
 const { sendNotification } = require('../services/notificationService');
+const { pullFromCloud, pushToCloud } = require('../services/cloudSync');
+const { runWorkerA, runWorkerB } = require('../services/automationEngine');
 
 /**
  * GET /api/scheduler/packages
@@ -169,7 +171,7 @@ router.post('/shuffle', authenticate, (req, res) => {
  * POST /api/scheduler/campaigns
  * Save and schedule a new campaign with its planned batches
  */
-router.post('/campaigns', authenticate, (req, res) => {
+router.post('/campaigns', authenticate, async (req, res) => {
   try {
     const {
       name,
@@ -301,6 +303,18 @@ router.post('/campaigns', authenticate, (req, res) => {
       type: 'INFO'
     });
 
+    // Persist campaign & batches to cloud immediately
+    await pushToCloud();
+
+    // Trigger immediate execution of due batches (Batch #1 is scheduled for immediate start)
+    try {
+      await runWorkerA();
+      await runWorkerB();
+      await pushToCloud();
+    } catch (workerErr) {
+      console.warn('Initial worker dispatch notice:', workerErr.message);
+    }
+
     return res.status(201).json({
       success: true,
       message: `Campaign "${name}" scheduled successfully.`,
@@ -319,16 +333,22 @@ router.post('/campaigns', authenticate, (req, res) => {
  * GET /api/scheduler/campaigns
  * List user or all campaigns
  */
-router.get('/campaigns', authenticate, (req, res) => {
+router.get('/campaigns', authenticate, async (req, res) => {
   try {
+    try {
+      await pullFromCloud();
+      await runWorkerA();
+      await runWorkerB();
+    } catch (e) {}
+
     const isAdmin = req.user.role === 'ADMIN';
     let sql = `
       SELECT c.*, p.name as package_name, s.name as service_name, u.username as user_name,
              (SELECT COUNT(*) FROM campaign_batches WHERE campaign_id = c.id AND status = 'Delivered') as delivered_batches,
              (SELECT COUNT(*) FROM campaign_batches WHERE campaign_id = c.id AND status = 'Scheduled') as remaining_batches
       FROM campaigns c
-      JOIN packages p ON c.package_id = p.id
-      JOIN services s ON c.service_id = s.id
+      LEFT JOIN packages p ON c.package_id = p.id
+      LEFT JOIN services s ON c.service_id = s.id
       JOIN users u ON c.user_id = u.id
       WHERE 1=1
     `;
@@ -408,19 +428,33 @@ router.get('/campaigns/:id', authenticate, (req, res) => {
  * GET /api/scheduler/share/:token
  * Read-only share link for campaign schedule
  */
-router.get('/share/:token', (req, res) => {
+router.get('/share/:token', async (req, res) => {
   try {
     const token = req.params.token;
-    const campaign = queryOne(
+    let campaign = queryOne(
       `SELECT c.id, c.name, c.total_quantity, c.total_batches, c.interval_minutes,
               c.campaign_window_hours, c.start_time, c.estimated_end_time, c.status,
-              p.name as package_name, s.name as service_name
+              COALESCE(p.name, c.name) as package_name, COALESCE(s.name, 'SMM Service') as service_name
        FROM campaigns c
-       JOIN packages p ON c.package_id = p.id
-       JOIN services s ON c.service_id = s.id
+       LEFT JOIN packages p ON c.package_id = p.id
+       LEFT JOIN services s ON c.service_id = s.id
        WHERE c.share_token = ?`,
       [token]
     );
+
+    if (!campaign) {
+      await pullFromCloud(true);
+      campaign = queryOne(
+        `SELECT c.id, c.name, c.total_quantity, c.total_batches, c.interval_minutes,
+                c.campaign_window_hours, c.start_time, c.estimated_end_time, c.status,
+                COALESCE(p.name, c.name) as package_name, COALESCE(s.name, 'SMM Service') as service_name
+         FROM campaigns c
+         LEFT JOIN packages p ON c.package_id = p.id
+         LEFT JOIN services s ON c.service_id = s.id
+         WHERE c.share_token = ?`,
+        [token]
+      );
+    }
 
     if (!campaign) {
       return res.status(404).json({ success: false, error: 'Schedule not found or share link is invalid.' });
@@ -447,7 +481,7 @@ router.get('/share/:token', (req, res) => {
  * POST /api/scheduler/campaigns/:id/status
  * Pause, resume, or cancel campaign
  */
-router.post('/campaigns/:id/status', authenticate, (req, res) => {
+router.post('/campaigns/:id/status', authenticate, async (req, res) => {
   try {
     const campaignId = req.params.id;
     const { status } = req.body;
@@ -464,7 +498,12 @@ router.post('/campaigns/:id/status', authenticate, (req, res) => {
       params.push(req.user.id);
     }
 
-    const campaign = queryOne(sql, params);
+    let campaign = queryOne(sql, params);
+    if (!campaign) {
+      await pullFromCloud(true);
+      campaign = queryOne(sql, params);
+    }
+
     if (!campaign) {
       return res.status(404).json({ success: false, error: 'Campaign not found.' });
     }
@@ -484,6 +523,8 @@ router.post('/campaigns/:id/status', authenticate, (req, res) => {
       message: `Campaign "${campaign.name}" status changed to ${status}.`,
       type: status === 'Cancelled' ? 'WARNING' : 'INFO'
     });
+
+    await pushToCloud();
 
     return res.json({
       success: true,

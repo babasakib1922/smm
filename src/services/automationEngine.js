@@ -343,12 +343,19 @@ function stopAutomationEngine() {
   console.log('[Automation Engine] Stopped.');
 }
 
+async function tickAutomation() {
+  await runWorkerA();
+  await runWorkerB();
+  await runStatusSync();
+}
+
 module.exports = {
   startAutomationEngine,
   stopAutomationEngine,
   runWorkerA,
   runWorkerB,
   runStatusSync,
+  tickAutomation,
   getDripQueueStats
 };
 
