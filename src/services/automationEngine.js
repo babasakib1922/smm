@@ -96,6 +96,15 @@ async function runWorkerA() {
       }
     }
 
+    if (dueCampaigns && dueCampaigns.length > 0) {
+      try {
+        const { pushToCloud } = require('./cloudSync');
+        await pushToCloud();
+      } catch (syncErr) {
+        // Non-blocking in offline / test environments
+      }
+    }
+
   } catch (err) {
     console.error('[Worker A Error]', err.message);
   } finally {
@@ -381,6 +390,15 @@ async function runWorkerB() {
             type: 'ERROR'
           });
         }
+      }
+    }
+
+    if (dueBatches && dueBatches.length > 0) {
+      try {
+        const { pushToCloud } = require('./cloudSync');
+        await pushToCloud();
+      } catch (syncErr) {
+        // Non-blocking in offline / test environments
       }
     }
 

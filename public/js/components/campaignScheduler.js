@@ -457,45 +457,107 @@ window.CampaignSchedulerComponent = {
         <h3>Campaign Details: ${campaign.name}</h3>
         <button class="modal-close" onclick="App.closeModal()">✕</button>
       </div>
-      <div style="margin-bottom: 20px; font-size: 13px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+
+      <div style="margin-bottom: 16px; font-size: 13px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; background: rgba(0,0,0,0.02); padding: 14px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.05);">
         <div>Status: <span class="status-pill ${campaign.status.toLowerCase()}">${campaign.status}</span></div>
-        <div>Total Quantity: <strong>${campaign.total_quantity.toLocaleString()}</strong></div>
-        <div>Total Batches: <strong>${campaign.total_batches}</strong></div>
-        <div>Interval: <strong>${campaign.interval_minutes} mins</strong></div>
+        <div>Interval: <strong>${campaign.interval_minutes} mins</strong> (${campaign.total_batches} Batches)</div>
         <div>Target URL: <a href="${campaign.target_url}" target="_blank" style="color: var(--accent-primary); word-break: break-all;">${campaign.target_url}</a></div>
-        <div>Next Batch: <strong>${nextBatch ? `Batch ${nextBatch.batch_number} at ${new Date(nextBatch.scheduled_at).toLocaleTimeString()}` : 'None'}</strong></div>
+        <div>Next Batch: <strong>${nextBatch ? `Batch ${nextBatch.batch_number} at ${new Date(nextBatch.scheduled_at).toLocaleTimeString()}` : 'Completed / None'}</strong></div>
+      </div>
+
+      <!-- Package Metric Breakdown Summary -->
+      <div style="margin-bottom: 20px; display: flex; gap: 8px; flex-wrap: wrap;">
+        <span style="background: rgba(59, 130, 246, 0.1); color: #2563eb; border: 1px solid rgba(59, 130, 246, 0.25); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">👁️ Views: ${campaign.total_quantity.toLocaleString()}</span>
+        ${campaign.total_likes ? `<span style="background: rgba(239, 68, 68, 0.1); color: #dc2626; border: 1px solid rgba(239, 68, 68, 0.25); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">❤️ Likes: ${campaign.total_likes.toLocaleString()} (${campaign.likes_waves || 3} waves)</span>` : ''}
+        ${campaign.total_saves ? `<span style="background: rgba(245, 158, 11, 0.1); color: #d97706; border: 1px solid rgba(245, 158, 11, 0.25); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">🔖 Saves: ${campaign.total_saves.toLocaleString()} (${campaign.saves_waves || 2} waves)</span>` : ''}
+        ${campaign.total_shares ? `<span style="background: rgba(16, 185, 129, 0.1); color: #059669; border: 1px solid rgba(16, 185, 129, 0.25); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">↗️ Shares: ${campaign.total_shares.toLocaleString()} (${campaign.shares_waves || 2} waves)</span>` : ''}
+        ${campaign.total_reposts ? `<span style="background: rgba(99, 102, 241, 0.1); color: #4f46e5; border: 1px solid rgba(99, 102, 241, 0.25); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">🔁 Reposts: ${campaign.total_reposts.toLocaleString()} (${campaign.reposts_waves || 2} waves)</span>` : ''}
       </div>
 
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <h4 style="font-size: 14px;">Batch Delivery Log</h4>
+        <h4 style="font-size: 14px; margin: 0;">Batch Execution List (${batches.length} Batches)</h4>
         <a href="/api/export/campaign/${campaign.id}" class="btn btn-secondary btn-sm" target="_blank">📥 Export CSV</a>
       </div>
 
-      <div class="table-container" style="max-height: 300px; overflow-y: auto;">
-        <table class="data-table">
+      <div class="table-container" style="max-height: 320px; overflow-y: auto;">
+        <table class="data-table" style="font-size: 12px;">
           <thead>
             <tr>
               <th>#</th>
-              <th>Quantity</th>
-              <th>Scheduled (UTC)</th>
+              <th>Views</th>
+              <th>Engagement Added</th>
+              <th>Schedule & Dispatched</th>
               <th>Status</th>
-              <th>Provider Ref</th>
+              <th>Provider Orders</th>
             </tr>
           </thead>
           <tbody>
             ${batches.map(b => `
               <tr>
-                <td>Batch ${b.batch_number}</td>
-                <td>${b.planned_quantity}</td>
-                <td style="font-size: 12px;">${new Date(b.scheduled_at).toLocaleTimeString()}</td>
-                <td><span class="status-pill ${b.status.toLowerCase()}">${b.status}</span></td>
-                <td style="font-family: monospace; font-size: 11px;">${b.provider_order_id || '-'}</td>
+                <td><strong>Batch ${b.batch_number}</strong></td>
+                <td><strong>${b.planned_quantity.toLocaleString()}</strong></td>
+                <td>
+                  <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                    ${b.likes_quantity > 0 ? `<span style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 11px;">❤️ +${b.likes_quantity} Likes</span>` : ''}
+                    ${b.saves_quantity > 0 ? `<span style="background: rgba(245, 158, 11, 0.12); color: #d97706; border: 1px solid rgba(245, 158, 11, 0.3); padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 11px;">🔖 +${b.saves_quantity} Saves</span>` : ''}
+                    ${b.shares_quantity > 0 ? `<span style="background: rgba(16, 185, 129, 0.12); color: #059669; border: 1px solid rgba(16, 185, 129, 0.3); padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 11px;">↗️ +${b.shares_quantity} Shares</span>` : ''}
+                    ${b.reposts_quantity > 0 ? `<span style="background: rgba(99, 102, 241, 0.12); color: #4f46e5; border: 1px solid rgba(99, 102, 241, 0.3); padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 11px;">🔁 +${b.reposts_quantity} Reposts</span>` : ''}
+                    ${(!b.likes_quantity && !b.saves_quantity && !b.shares_quantity && !b.reposts_quantity) ? `<span style="color: var(--text-muted); font-size: 11px;">Views Only</span>` : ''}
+                  </div>
+                </td>
+                <td>
+                  <div><span style="color: var(--text-muted); font-size: 11px;">Sched:</span> <strong>${new Date(b.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</strong></div>
+                  ${b.executed_at ? `<div style="font-size: 11px; color: #10b981; margin-top: 3px; font-weight: 600;">⚡ Sent: ${new Date(b.executed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>` : ''}
+                </td>
+                <td>
+                  ${b.status === 'Delivered' ? `<span class="status-pill delivered">Delivered</span>` : ''}
+                  ${b.status === 'Processing' ? `<span class="status-pill processing">Processing</span>` : ''}
+                  ${b.status === 'Scheduled' && b.last_error && b.last_error.toLowerCase().includes('active order') ? `<span class="status-pill" style="background: rgba(245, 158, 11, 0.15); color: #d97706; border: 1px solid rgba(245, 158, 11, 0.3); font-weight: 600;" title="${b.last_error}">⏳ Active Order (Retrying)</span>` : ''}
+                  ${b.status === 'Scheduled' && (!b.last_error || !b.last_error.toLowerCase().includes('active order')) ? `<span class="status-pill scheduled">${b.status}</span>` : ''}
+                  ${b.status === 'Failed' ? `<span class="status-pill failed" title="${b.last_error || 'Error'}">Failed</span>` : ''}
+                  ${b.status === 'Cancelled' ? `<span class="status-pill canceled">Cancelled</span>` : ''}
+                  ${b.last_error && !b.last_error.toLowerCase().includes('active order') ? `<span title="${b.last_error}" style="color: #ef4444; font-size: 11px; margin-left: 4px; cursor: help;">⚠️ Details</span>` : ''}
+                </td>
+                <td>
+                  <div style="display: flex; flex-direction: column; gap: 3px;">
+                    <div>
+                      <span style="font-size: 11px; color: var(--accent-primary); font-weight: 700;">👁️ Views:</span>
+                      <code style="font-size: 11px;">${b.provider_order_id ? `#${b.provider_order_id}` : (b.last_error && b.last_error.toLowerCase().includes('active order') ? 'Waiting release' : (b.status === 'Failed' ? 'Failed' : 'Queued'))}</code>
+                    </div>
+                    ${(b.likes_quantity > 0 || b.likes_provider_order_id) ? `
+                      <div>
+                        <span style="font-size: 11px; color: #ef4444; font-weight: 700;">❤️ Likes:</span>
+                        <code style="font-size: 11px; color: #ef4444;">${b.likes_provider_order_id ? `#${b.likes_provider_order_id}` : (b.status === 'Delivered' ? 'Delivering...' : 'Queued')}</code>
+                      </div>
+                    ` : ''}
+                  </div>
+                </td>
               </tr>
             `).join('')}
           </tbody>
         </table>
       </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 18px; flex-wrap: wrap; gap: 10px;">
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-primary btn-sm" onclick="CampaignScheduler.dispatchCampaignNow('${campaign.id}')">⚡ Dispatch Due Batches Now</button>
+          ${['Scheduled', 'Running', 'Paused'].includes(campaign.status) ? `<button class="btn btn-danger btn-sm" onclick="CampaignScheduler.updateCampaignStatus('${campaign.id}', 'Cancelled')" style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3);">Cancel Campaign</button>` : ''}
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="App.closeModal()">Close</button>
+      </div>
     `);
+  },
+
+  async dispatchCampaignNow(campaignId) {
+    API.showToast('Dispatching due batches...', 'info');
+    const res = await API.post(`/api/scheduler/campaigns/${campaignId}/dispatch-now`);
+    if (res.success) {
+      API.showToast(res.message || 'Due batches dispatched successfully', 'success');
+      this.viewDetails(campaignId);
+      this.loadUserCampaigns();
+    } else {
+      API.showToast(res.error || 'Failed to dispatch batches', 'error');
+    }
   }
 };
 

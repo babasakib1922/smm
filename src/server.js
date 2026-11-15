@@ -64,6 +64,27 @@ app.use(async (req, res, next) => {
   }
 });
 
+// Throttled opportunistic execution on serverless: ensure due batches execute whenever traffic arrives
+let lastOpportunisticCheck = 0;
+const OPPORTUNISTIC_INTERVAL_MS = 25000;
+
+app.use((req, res, next) => {
+  const now = Date.now();
+  if (now - lastOpportunisticCheck > OPPORTUNISTIC_INTERVAL_MS && req.path !== '/api/cron' && !req.path.startsWith('/css') && !req.path.startsWith('/js')) {
+    lastOpportunisticCheck = now;
+    (async () => {
+      try {
+        const { runWorkerA, runWorkerB } = require('./services/automationEngine');
+        await runWorkerA();
+        await runWorkerB();
+      } catch (err) {
+        // Non-blocking
+      }
+    })();
+  }
+  next();
+});
+
 // Serve static assets from public/
 app.use(express.static(path.join(__dirname, '../public')));
 

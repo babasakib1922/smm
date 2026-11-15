@@ -1,0 +1,16 @@
+name: Scheduled Batch Automation Cron
+
+on:
+  schedule:
+    # Runs every 5 minutes 24/7 to guarantee automated scheduled batch execution
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  trigger-cron:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger SMM Batch Automation Cron
+        run: |
+          echo "Triggering SMM Automation Cron at $(date -u)"
+          curl -s -f -m 45 "https://smm-khaki-delta.vercel.app/api/cron" || echo "Cron endpoint ping completed."

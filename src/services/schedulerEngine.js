@@ -269,8 +269,8 @@ function distributeWaves(totalCount, waveCount, totalBatches, isShuffle = false,
     uniqueBatches.sort((a, b) => a - b);
   }
 
-  // Minimum per wave (reposts have minimum 10 per wave when possible)
-  const minPerWave = (metricType === 'reposts' && parsedCount >= actualWaves * 10) ? 10 : 1;
+  // Minimum per wave (enforce minimum 10 per wave when total is sufficient for provider limits)
+  const minPerWave = (parsedCount >= actualWaves * 10) ? 10 : 1;
   const avgVal = parsedCount / actualWaves;
 
   // Distribute quantities with natural organic variation
