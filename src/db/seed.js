@@ -19,16 +19,20 @@ async function seedData() {
     run("UPDATE users SET pass_key_hash = ? WHERE role = 'ADMIN'", [adminPassHash]);
   }
 
-  // 2. Seed Default User if none exists
-  const userExists = queryOne("SELECT * FROM users WHERE role = 'USER' LIMIT 1");
-  if (!userExists) {
-    const userPassHash = await hashPassKey('user12345pass');
-    run(
-      `INSERT INTO users (username, email, pass_key_hash, role, balance, status, is_protected_admin, created_at)
-       VALUES (?, ?, ?, 'USER', 250.00, 'ACTIVE', 0, ?)`,
-      ['client_demo', 'demo@client.internal', userPassHash, now]
-    );
-    console.log('Default User seeded: username="client_demo", passKey="user12345pass"');
+  // 2. Seed Default User ONCE on fresh install (do not resurrect if deleted)
+  const seedRecord = queryOne("SELECT value FROM admin_settings WHERE key = 'demo_user_seed_completed'");
+  if (!seedRecord) {
+    const userExists = queryOne("SELECT * FROM users WHERE role = 'USER' LIMIT 1");
+    if (!userExists) {
+      const userPassHash = await hashPassKey('user12345pass');
+      run(
+        `INSERT INTO users (username, email, pass_key_hash, role, balance, status, is_protected_admin, created_at)
+         VALUES (?, ?, ?, 'USER', 250.00, 'ACTIVE', 0, ?)`,
+        ['client_demo', 'demo@client.internal', userPassHash, now]
+      );
+      console.log('Default User seeded: username="client_demo", passKey="user12345pass"');
+    }
+    run("INSERT OR REPLACE INTO admin_settings (key, value, updated_at) VALUES ('demo_user_seed_completed', '1', ?)", [now]);
   }
 
   // 3. Seed API Providers

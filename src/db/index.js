@@ -72,6 +72,17 @@ async function initDB() {
   // Run schema migrations safely
   dbInstance.exec(SCHEMA_SQL);
 
+  // Dynamic migrations for users table (telegram_username, expires_at)
+  try {
+    const userCols = query('PRAGMA table_info(users);');
+    if (!userCols.some(c => c.name === 'telegram_username')) {
+      dbInstance.run('ALTER TABLE users ADD COLUMN telegram_username TEXT;');
+    }
+    if (!userCols.some(c => c.name === 'expires_at')) {
+      dbInstance.run('ALTER TABLE users ADD COLUMN expires_at TEXT;');
+    }
+  } catch (e) {}
+
   // Dynamic migrations for optional campaign likes/saves/reposts/shares tracking
   try {
     const batchCols = query('PRAGMA table_info(campaign_batches);');

@@ -6,6 +6,7 @@ const { query, queryOne, run, transaction } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { logAudit } = require('../middleware/auditLog');
 const { hashPassKey } = require('../config/security');
+const { pullFromCloud, pushToCloud, recordDeletedUserId } = require('../services/cloudSync');
 
 // Guard all routes in this router with ADMIN role
 router.use(authenticate, requireRole('ADMIN'));
@@ -14,14 +15,15 @@ router.use(authenticate, requireRole('ADMIN'));
  * GET /api/admin/users
  * List all users with search, role filter, status filter, and pagination
  */
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
+    await pullFromCloud();
     const { search, role, status, page = 1, limit = 50 } = req.query;
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
 
     let sql = `
-      SELECT u.id, u.username, u.email, u.role, u.balance, u.status, u.is_protected_admin,
-             u.created_at, u.last_login_at, u.last_login_ip,
+      SELECT u.id, u.username, u.telegram_username, u.email, u.role, u.balance, u.status, u.is_protected_admin,
+             u.expires_at, u.created_at, u.last_login_at, u.last_login_ip,
              (SELECT COUNT(*) FROM orders WHERE user_id = u.id) AS total_orders,
              (SELECT COUNT(*) FROM user_api_credentials WHERE user_id = u.id AND connection_status = 'CONNECTED') AS connected_apis
       FROM users u
@@ -30,9 +32,9 @@ router.get('/', (req, res) => {
     const params = [];
 
     if (search) {
-      sql += ' AND (u.username LIKE ? OR u.email LIKE ? OR CAST(u.id AS TEXT) = ?)';
+      sql += ' AND (u.username LIKE ? OR u.telegram_username LIKE ? OR u.email LIKE ? OR CAST(u.id AS TEXT) = ?)';
       const term = `%${search}%`;
-      params.push(term, term, search);
+      params.push(term, term, term, search);
     }
 
     if (role) {
@@ -43,6 +45,8 @@ router.get('/', (req, res) => {
     if (status) {
       sql += ' AND u.status = ?';
       params.push(status);
+    } else {
+      sql += " AND u.status != 'DELETED'";
     }
 
     sql += ' ORDER BY u.id ASC LIMIT ? OFFSET ?';
@@ -52,11 +56,11 @@ router.get('/', (req, res) => {
 
     // Total count query
     const countSql = 'SELECT COUNT(*) as total FROM users WHERE 1=1' +
-      (search ? ' AND (username LIKE ? OR email LIKE ? OR CAST(id AS TEXT) = ?)' : '') +
+      (search ? ' AND (username LIKE ? OR telegram_username LIKE ? OR email LIKE ? OR CAST(id AS TEXT) = ?)' : '') +
       (role ? ' AND role = ?' : '') +
-      (status ? ' AND status = ?' : '');
+      (status ? ' AND status = ?' : " AND status != 'DELETED'");
     const countParams = [];
-    if (search) { countParams.push(`%${search}%`, `%${search}%`, search); }
+    if (search) { countParams.push(`%${search}%`, `%${search}%`, `%${search}%`, search); }
     if (role) { countParams.push(role); }
     if (status) { countParams.push(status); }
 
@@ -68,6 +72,14 @@ router.get('/', (req, res) => {
       pagination: {
         total: countRow ? countRow.total : users.length,
         page: parseInt(page, 10),
+        limit: parseInt(limit, 10)
+      }
+    });
+  } catch (err) {
+    console.error('Admin list users error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to retrieve users.' });
+  }
+});
         limit: parseInt(limit, 10)
       }
     });
@@ -136,48 +148,66 @@ router.get('/:id', (req, res) => {
 
 /**
  * POST /api/admin/users
- * Create a new user or administrator account
+ * Create a new user account with Telegram username, Access Pass Key, and Expiration Date
  */
 router.post('/', async (req, res) => {
   try {
-    const { username, email, passKey, role = 'USER', initialBalance = 0 } = req.body;
+    const { telegramUsername, username, passKey, expiresAt, role = 'USER', initialBalance = 0, email } = req.body;
 
-    if (!username || !email || !passKey) {
+    const rawHandle = String(telegramUsername || username || '').trim();
+    const rawKey = String(passKey || '').trim();
+
+    if (!rawHandle) {
       return res.status(400).json({
         success: false,
-        error: 'Username, email, and access pass key are required.'
+        error: 'Telegram username is required.'
       });
     }
 
-    if (!['ADMIN', 'USER'].includes(role)) {
-      return res.status(400).json({ success: false, error: 'Invalid role specified.' });
+    if (!rawKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'Access Pass Key is required.'
+      });
     }
 
-    const existingUser = queryOne('SELECT id FROM users WHERE username = ? OR email = ?', [username.trim(), email.trim()]);
+    const cleanTelegram = rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`;
+    const cleanUsername = rawHandle.replace(/^@/, '').trim();
+    const cleanEmail = email && email.trim() ? email.trim() : `${cleanUsername.toLowerCase()}@telegram.internal`;
+
+    // Check if user already exists
+    const existingUser = queryOne(
+      'SELECT id FROM users WHERE LOWER(username) = ? OR LOWER(telegram_username) = ? OR LOWER(email) = ?',
+      [cleanUsername.toLowerCase(), cleanTelegram.toLowerCase(), cleanEmail.toLowerCase()]
+    );
     if (existingUser) {
-      return res.status(400).json({ success: false, error: 'Username or email already in use.' });
+      return res.status(400).json({ success: false, error: `User with username "${cleanTelegram}" already exists.` });
     }
 
-    const passKeyHash = await hashPassKey(passKey);
+    const passKeyHash = await hashPassKey(rawKey);
     const now = new Date().toISOString();
     const balance = parseFloat(initialBalance) || 0.00;
+    const finalExpiresAt = expiresAt ? new Date(expiresAt).toISOString() : null;
 
     const result = run(
-      `INSERT INTO users (username, email, pass_key_hash, role, balance, status, is_protected_admin, created_at)
-       VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
-      [username.trim(), email.trim(), passKeyHash, role, balance, role === 'ADMIN' ? 1 : 0, now]
+      `INSERT INTO users (username, telegram_username, email, pass_key_hash, role, balance, status, is_protected_admin, expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)`,
+      [cleanUsername, cleanTelegram, cleanEmail, passKeyHash, role, balance, role === 'ADMIN' ? 1 : 0, finalExpiresAt, now]
     );
 
-    logAudit(req.user.id, 'CREATE_USER', 'users', result.lastInsertRowid, { username, email, role, balance }, req);
+    // Persist to Cloud immediately
+    await pushToCloud();
+
+    logAudit(req.user.id, 'CREATE_USER', 'users', result.lastInsertRowid, { username: cleanUsername, telegram: cleanTelegram, expiresAt: finalExpiresAt }, req);
 
     return res.status(201).json({
       success: true,
-      message: `Account for ${username} created successfully.`,
+      message: `User ${cleanTelegram} created successfully with Access Pass Key.`,
       userId: result.lastInsertRowid
     });
   } catch (err) {
     console.error('Admin create user error:', err);
-    return res.status(500).json({ success: false, error: 'Failed to create user account.' });
+    return res.status(500).json({ success: false, error: 'Failed to create user account: ' + err.message });
   }
 });
 
@@ -281,12 +311,9 @@ router.put('/:id/role', (req, res) => {
 
 /**
  * DELETE /api/admin/users/:id
- * Delete a user account permanently (Soft delete / anonymize, preserve audit/financial records)
- * SECTION 3 CRITICAL:
- * - An ADMIN cannot be deleted by another ADMIN!
- * - Prevent accidental removal of the final active ADMIN account.
+ * Delete a user account permanently
  */
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
     const targetUserId = parseInt(req.params.id, 10);
     const targetUser = queryOne('SELECT * FROM users WHERE id = ?', [targetUserId]);
@@ -296,48 +323,29 @@ router.delete('/:id', (req, res) => {
     }
 
     // SECTION 3 ADMIN PROTECTION:
-    // An ADMIN cannot be deleted by another ADMIN!
-    if (targetUser.role === 'ADMIN') {
-      return res.status(403).json({
-        success: false,
-        error: 'CRITICAL SECURITY VIOLATION: An administrator account cannot be deleted by another administrator.'
-      });
-    }
-
-    if (targetUser.is_protected_admin) {
+    if (targetUser.role === 'ADMIN' || targetUser.is_protected_admin) {
       return res.status(403).json({
         success: false,
         error: 'CRITICAL SECURITY VIOLATION: Protected administrator accounts can never be deleted.'
       });
     }
 
-    // Check final active ADMIN protection
-    const activeAdminCount = queryOne("SELECT COUNT(*) as count FROM users WHERE role = 'ADMIN' AND status = 'ACTIVE'");
-    if (targetUser.role === 'ADMIN' && activeAdminCount && activeAdminCount.count <= 1) {
-      return res.status(403).json({
-        success: false,
-        error: 'Action blocked: Cannot delete or remove the final active administrator account.'
-      });
-    }
-
-    // Immediately revoke all sessions and access tokens
+    // Immediately revoke all sessions and clean up associated records
     run('DELETE FROM sessions WHERE user_id = ?', [targetUserId]);
+    run('DELETE FROM user_api_credentials WHERE user_id = ?', [targetUserId]);
+    run('DELETE FROM user_service_mappings WHERE user_id = ?', [targetUserId]);
+    run('DELETE FROM orders WHERE user_id = ?', [targetUserId]);
+    run('DELETE FROM users WHERE id = ?', [targetUserId]);
 
-    // Anonymize and mark DELETED to preserve order and financial audit history
-    const anonymizedEmail = `deleted_${targetUserId}_${Date.now()}@anonymized.internal`;
-    const anonymizedUsername = `deleted_user_${targetUserId}`;
-    run(
-      `UPDATE users 
-       SET status = 'DELETED', username = ?, email = ?, pass_key_hash = 'DELETED_REVOKED'
-       WHERE id = ?`,
-      [anonymizedUsername, anonymizedEmail, targetUserId]
-    );
+    // Record deleted ID and push to Cloud Gist so it never resurrects
+    recordDeletedUserId(targetUserId);
+    await pushToCloud();
 
     logAudit(req.user.id, 'DELETE_USER', 'users', targetUserId, { originalUsername: targetUser.username }, req);
 
     return res.json({
       success: true,
-      message: `User account #${targetUserId} has been deleted and access revoked permanently.`
+      message: `User account #${targetUserId} (${targetUser.username}) deleted permanently.`
     });
   } catch (err) {
     console.error('Admin delete user error:', err);

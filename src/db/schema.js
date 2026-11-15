@@ -5,12 +5,14 @@ const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT UNIQUE NOT NULL,
+  telegram_username TEXT,
   email TEXT UNIQUE NOT NULL,
   pass_key_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'USER' CHECK(role IN ('ADMIN', 'USER')),
   balance REAL NOT NULL DEFAULT 0.00,
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE', 'DISABLED', 'DELETED')),
   is_protected_admin INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT,
   created_at TEXT NOT NULL,
   last_login_at TEXT,
   last_login_ip TEXT

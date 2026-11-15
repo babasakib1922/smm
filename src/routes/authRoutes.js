@@ -6,10 +6,11 @@ const { query, queryOne, run } = require('../db');
 const { verifyPassKey, generateToken } = require('../config/security');
 const { authenticate } = require('../middleware/auth');
 const { logAudit } = require('../middleware/auditLog');
+const { pullFromCloud } = require('../services/cloudSync');
 
 /**
  * POST /api/auth/login
- * Private authentication requiring valid username and access pass key.
+ * Private authentication requiring valid access pass key.
  * No public sign up.
  */
 router.post('/login', async (req, res) => {
@@ -24,6 +25,9 @@ router.post('/login', async (req, res) => {
       });
     }
 
+    // Pull from cloud state to ensure new keys created in another container are loaded
+    await pullFromCloud();
+
     let user = null;
 
     // Direct match for admin passkey 1922 (or sakib1922)
@@ -33,15 +37,15 @@ router.post('/login', async (req, res) => {
 
     // Direct match for client demo passkey
     if (!user && (cleanKey === 'user12345pass' || cleanKey === 'demo12345pass')) {
-      user = queryOne("SELECT * FROM users WHERE role = 'USER' LIMIT 1");
+      user = queryOne("SELECT * FROM users WHERE role = 'USER' AND status = 'ACTIVE' LIMIT 1");
     }
 
     // If username was provided, check that specific user first
     if (!user && username && String(username).trim()) {
       const cleanInput = String(username).trim().toLowerCase();
       let candidate = queryOne(
-        'SELECT * FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?',
-        [cleanInput, cleanInput]
+        'SELECT * FROM users WHERE (LOWER(username) = ? OR LOWER(telegram_username) = ? OR LOWER(email) = ?) AND status = "ACTIVE"',
+        [cleanInput, cleanInput, cleanInput]
       );
       if (!candidate && ['admin', 'sakib', 'sakib1922'].includes(cleanInput)) {
         candidate = queryOne("SELECT * FROM users WHERE role = 'ADMIN' LIMIT 1");
@@ -56,7 +60,7 @@ router.post('/login', async (req, res) => {
 
     // If still not resolved, verify pass key against all active users
     if (!user) {
-      const allUsers = query("SELECT * FROM users WHERE status != 'DELETED'");
+      const allUsers = query("SELECT * FROM users WHERE status = 'ACTIVE'");
       for (const u of allUsers) {
         if (u.pass_key_hash) {
           const isValid = await verifyPassKey(cleanKey, u.pass_key_hash);
@@ -73,6 +77,17 @@ router.post('/login', async (req, res) => {
         success: false,
         error: 'Invalid Access Pass Key. Access denied.'
       });
+    }
+
+    // Check expiration date
+    if (user.expires_at) {
+      const expDate = new Date(user.expires_at);
+      if (!isNaN(expDate.getTime()) && expDate < new Date()) {
+        return res.status(403).json({
+          success: false,
+          error: 'Your Access Pass Key has expired. Please contact administrator to renew.'
+        });
+      }
     }
 
     // Check if account is disabled or deleted
@@ -127,10 +142,12 @@ router.post('/login', async (req, res) => {
       user: {
         id: user.id,
         username: user.username,
+        telegram_username: user.telegram_username,
         email: user.email,
         role: user.role,
         balance: user.balance,
         status: user.status,
+        expires_at: user.expires_at,
         isProtectedAdmin: Boolean(user.is_protected_admin),
         createdAt: user.created_at,
         lastLoginAt: now.toISOString()
@@ -162,9 +179,11 @@ router.get('/me', authenticate, (req, res) => {
     user: {
       id: req.user.id,
       username: req.user.username,
+      telegram_username: req.user.telegram_username,
       email: req.user.email,
       role: req.user.role,
       status: req.user.status,
+      expires_at: req.user.expires_at,
       isProtectedAdmin: Boolean(req.user.is_protected_admin),
       createdAt: req.user.created_at,
       lastLoginAt: req.user.last_login_at,

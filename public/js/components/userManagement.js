@@ -50,19 +50,17 @@ window.UserManagementComponent = {
             <thead>
               <tr>
                 <th>ID</th>
-                <th>Username</th>
-                <th>Email</th>
+                <th>Telegram Username</th>
+                <th>Pass Key Status</th>
+                <th>Expiration Date</th>
                 <th>Role</th>
-                <th>Balance</th>
                 <th>Status</th>
-                <th>Orders</th>
-                <th>Connected APIs</th>
-                <th>Created Date</th>
+                <th>Created</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody id="admin-users-tbody">
-              <tr><td colspan="10" style="text-align: center; padding: 32px;">Loading users...</td></tr>
+              <tr><td colspan="8" style="text-align: center; padding: 32px;">Loading users...</td></tr>
             </tbody>
           </table>
         </div>
@@ -101,25 +99,37 @@ window.UserManagementComponent = {
     tbody.innerHTML = this.users.map(u => {
       const isSelf = App.user && App.user.id === u.id;
       const isAdminUser = u.role === 'ADMIN';
+      const telegramDisplay = u.telegram_username || (u.username.startsWith('@') ? u.username : `@${u.username}`);
+
+      // Expiration display
+      let expHtml = '<span class="status-pill active" style="background:#f0fdf4;color:#16a34a;font-size:11px;">Lifetime</span>';
+      if (u.expires_at) {
+        const expDate = new Date(u.expires_at);
+        const now = new Date();
+        const diffMs = expDate.getTime() - now.getTime();
+        const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+        if (diffDays <= 0) {
+          expHtml = `<span class="status-pill disabled" style="background:#fee2e2;color:#dc2626;font-size:11px;" title="${expDate.toLocaleString()}">Expired</span>`;
+        } else {
+          expHtml = `<div style="line-height:1.2;"><span style="font-weight:600;font-size:12px;">${expDate.toLocaleDateString()}</span><br><span style="font-size:11px;color:var(--text-dim);">${diffDays} days left</span></div>`;
+        }
+      }
 
       return `
         <tr>
           <td style="font-weight: 700;">#${u.id}</td>
           <td style="font-weight: 600;">
-            ${u.username}
+            <span style="color:#0284c7;margin-right:4px;">✈️</span>${telegramDisplay}
             ${u.is_protected_admin ? '<span title="Protected Admin" style="font-size: 11px;"> 🛡️</span>' : ''}
           </td>
-          <td style="font-size: 13px; color: var(--text-muted);">${u.email}</td>
+          <td><span class="status-pill connected" style="font-size:11px;">Active Key</span></td>
+          <td>${expHtml}</td>
           <td><span class="role-tag ${u.role.toLowerCase()}">${u.role}</span></td>
-          <td style="font-weight: 700; color: var(--color-success);">$${u.balance.toFixed(2)}</td>
           <td><span class="status-pill ${u.status.toLowerCase()}">${u.status}</span></td>
-          <td>${u.total_orders || 0}</td>
-          <td>${u.connected_apis > 0 ? `<span class="status-pill connected">${u.connected_apis} connected</span>` : '<span style="color: var(--text-dim); font-size: 12px;">None</span>'}</td>
           <td style="font-size: 12px; color: var(--text-muted);">${new Date(u.created_at).toLocaleDateString()}</td>
           <td>
             <div style="display: flex; gap: 6px; align-items: center;">
-              <button class="btn btn-secondary btn-sm" onclick="UserManagementComponent.viewUserProfile(${u.id})">🔍 View APIs & Info</button>
-              
               <!-- Enable / Disable Button with Admin Protection -->
               ${!isAdminUser && u.status === 'ACTIVE' ? `
                 <button class="btn btn-danger btn-sm" onclick="UserManagementComponent.toggleStatus(${u.id}, 'DISABLED')">Disable</button>
@@ -128,7 +138,7 @@ window.UserManagementComponent = {
               ` : ''}
 
               <!-- Delete Button with Admin Protection -->
-              ${!isAdminUser && u.status !== 'DELETED' ? `
+              ${!isAdminUser ? `
                 <button class="btn btn-danger btn-sm" onclick="UserManagementComponent.deleteUser(${u.id}, '${u.username}')">🗑️ Delete</button>
               ` : ''}
             </div>
@@ -138,69 +148,103 @@ window.UserManagementComponent = {
     }).join('');
   },
 
+  setExpirationDays(days) {
+    const input = document.getElementById('new-user-expires');
+    if (!input) return;
+    if (days === 0) {
+      input.value = '';
+    } else {
+      const d = new Date();
+      d.setDate(d.getDate() + days);
+      input.value = d.toISOString().split('T')[0];
+    }
+  },
+
+  generateRandomKey() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let key = 'VIP-';
+    for (let i = 0; i < 6; i++) {
+      key += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    const input = document.getElementById('new-user-passkey');
+    if (input) input.value = key;
+  },
+
   showCreateUserModal() {
+    // Default expiration to 30 days
+    const defaultDate = new Date();
+    defaultDate.setDate(defaultDate.getDate() + 30);
+    const defaultDateStr = defaultDate.toISOString().split('T')[0];
+
     App.showModal(`
       <div class="modal-header">
-        <h3>Create New User Account</h3>
+        <h3>Add Client User Account</h3>
         <button class="modal-close" onclick="App.closeModal()">✕</button>
       </div>
 
       <form id="create-user-form">
-        <div class="form-group">
-          <label class="form-label">Username</label>
-          <input type="text" id="new-user-username" class="form-control" placeholder="Enter unique username" required>
+        <div class="form-group" style="margin-bottom: 18px;">
+          <label class="form-label">Telegram Username</label>
+          <div style="position: relative;">
+            <input type="text" id="new-user-telegram" class="form-control" placeholder="@username (e.g. @sarah_vip)" required autofocus>
+          </div>
+          <span style="font-size: 11px; color: var(--text-dim);">Enter the client's Telegram handle.</span>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Email Address</label>
-          <input type="email" id="new-user-email" class="form-control" placeholder="user@domain.com" required>
-        </div>
-
-        <div class="form-group">
+        <div class="form-group" style="margin-bottom: 18px;">
           <label class="form-label">Access Pass Key</label>
-          <input type="text" id="new-user-passkey" class="form-control" placeholder="Generate or enter secure pass key" required>
-          <span style="font-size: 11px; color: var(--text-dim);">Users require this pass key to log in to the private panel.</span>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="new-user-passkey" class="form-control" placeholder="Enter private pass key" required>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="UserManagementComponent.generateRandomKey()" style="white-space: nowrap;">🎲 Generate</button>
+          </div>
+          <span style="font-size: 11px; color: var(--text-dim);">This is the key the client will type on the login screen to enter the portal.</span>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Account Role</label>
-          <select id="new-user-role" class="form-control">
-            <option value="USER">USER</option>
-            <option value="ADMIN">ADMIN</option>
-          </select>
+        <div class="form-group" style="margin-bottom: 22px;">
+          <label class="form-label">Expiration Date</label>
+          <input type="date" id="new-user-expires" class="form-control" value="${defaultDateStr}">
+          <div style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;">
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 8px;" onclick="UserManagementComponent.setExpirationDays(7)">+7 Days</button>
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 8px;" onclick="UserManagementComponent.setExpirationDays(30)">+30 Days</button>
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 8px;" onclick="UserManagementComponent.setExpirationDays(90)">+90 Days</button>
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 8px;" onclick="UserManagementComponent.setExpirationDays(0)">Lifetime (Never)</button>
+          </div>
+          <span style="font-size: 11px; color: var(--text-dim); margin-top: 4px; display: block;">After this date, the pass key will be rejected automatically.</span>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Initial Balance ($)</label>
-          <input type="number" step="0.01" id="new-user-balance" class="form-control" value="0.00" min="0">
-        </div>
-
-        <div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px;">
+        <div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-glass);">
           <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Cancel</button>
-          <button type="submit" class="btn btn-primary">Create Account</button>
+          <button type="submit" class="btn btn-primary" style="padding: 10px 20px;">Create Client & Key</button>
         </div>
       </form>
     `);
 
+    // Auto-generate a friendly pass key by default
+    this.generateRandomKey();
+
     document.getElementById('create-user-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const username = document.getElementById('new-user-username').value.trim();
-      const email = document.getElementById('new-user-email').value.trim();
+      const telegramUsername = document.getElementById('new-user-telegram').value.trim();
       const passKey = document.getElementById('new-user-passkey').value.trim();
-      const role = document.getElementById('new-user-role').value;
-      const initialBalance = parseFloat(document.getElementById('new-user-balance').value) || 0;
+      const expiresAt = document.getElementById('new-user-expires').value;
+
+      if (!telegramUsername) {
+        API.showToast('Telegram username is required', 'error');
+        return;
+      }
+      if (!passKey) {
+        API.showToast('Access Pass Key is required', 'error');
+        return;
+      }
 
       const res = await API.post('/api/admin/users', {
-        username,
-        email,
+        telegramUsername,
         passKey,
-        role,
-        initialBalance
+        expiresAt: expiresAt ? `${expiresAt}T23:59:59.000Z` : null
       });
 
-      App.closeModal();
-
       if (res.success) {
+        App.closeModal();
         API.showToast(res.message, 'success');
         this.loadUsers();
       } else {

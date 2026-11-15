@@ -35,13 +35,24 @@ async function authenticate(req, res, next) {
     }
 
     // Fetch user and check active status
-    let user = queryOne('SELECT id, username, email, role, balance, status, is_protected_admin, created_at, last_login_at FROM users WHERE id = ?', [decoded.userId]);
+    let user = queryOne('SELECT id, username, telegram_username, email, role, balance, status, is_protected_admin, expires_at, created_at, last_login_at FROM users WHERE id = ?', [decoded.userId]);
     if (!user && decoded.role === 'ADMIN') {
-      user = queryOne("SELECT id, username, email, role, balance, status, is_protected_admin, created_at, last_login_at FROM users WHERE role = 'ADMIN' LIMIT 1");
+      user = queryOne("SELECT id, username, telegram_username, email, role, balance, status, is_protected_admin, expires_at, created_at, last_login_at FROM users WHERE role = 'ADMIN' LIMIT 1");
     }
 
     if (!user) {
       return res.status(401).json({ success: false, error: 'User account not found.' });
+    }
+
+    // Check expiration date
+    if (user.expires_at) {
+      const expDate = new Date(user.expires_at);
+      if (!isNaN(expDate.getTime()) && expDate < new Date()) {
+        return res.status(403).json({
+          success: false,
+          error: 'Your Access Pass Key has expired. Please contact administrator to renew.'
+        });
+      }
     }
 
     // Enforce immediate access revocation for disabled or deleted users
