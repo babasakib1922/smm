@@ -173,6 +173,10 @@ router.post('/shuffle', authenticate, (req, res) => {
  */
 router.post('/campaigns', authenticate, async (req, res) => {
   try {
+    try {
+      await pullFromCloud(true);
+    } catch (_) {}
+
     const {
       name,
       packageId,
@@ -444,7 +448,14 @@ router.get('/campaigns/:id', authenticate, async (req, res) => {
 router.post('/campaigns/:id/dispatch', authenticate, async (req, res) => {
   try {
     const campaignId = req.params.id;
-    await pullFromCloud();
+    await pullFromCloud(true);
+
+    const nowIso = new Date().toISOString();
+    // If campaign is Scheduled, activate to Running so Worker B processes due batches
+    run("UPDATE campaigns SET status = 'Running', updated_at = ? WHERE id = ? AND status = 'Scheduled'", [nowIso, campaignId]);
+    // Reset any failed batches to Scheduled with retry_count = 0 so they can be re-dispatched
+    run("UPDATE campaign_batches SET status = 'Scheduled', retry_count = 0, last_error = NULL WHERE campaign_id = ? AND status = 'Failed'", [campaignId]);
+
     await runWorkerA();
     await runWorkerB();
     await pushToCloud();

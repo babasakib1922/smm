@@ -5,6 +5,7 @@ const { authenticate, requireRole } = require('../middleware/auth');
 const { logAudit } = require('../middleware/auditLog');
 const { decryptText } = require('../config/security');
 const { getProviderAdapter } = require('../services/apiAdapter');
+const { pullFromCloud, pushToCloud } = require('../services/cloudSync');
 
 /**
  * GET /api/services
@@ -240,8 +241,10 @@ router.delete('/:id', authenticate, (req, res) => {
  * GET /api/services/user-mappings
  * Get user's automation service slot mappings (Views, Likes, Saves, Reposts, Shares)
  */
-router.get('/user-mappings', authenticate, (req, res) => {
+router.get('/user-mappings', authenticate, async (req, res) => {
   try {
+    try { await pullFromCloud(); } catch (_) {}
+
     const defaultTypes = [
       { service_type: 'views', is_enabled: 1, provider_id: 2, provider_service_id: '10322', service_name: 'Xmedia High-Retention Views', rate_per_k: 0.80 },
       { service_type: 'likes', is_enabled: 1, provider_id: 1, provider_service_id: '1123', service_name: 'Zeofame Organic Likes', rate_per_k: 0.50 },
@@ -250,13 +253,24 @@ router.get('/user-mappings', authenticate, (req, res) => {
       { service_type: 'shares', is_enabled: 0, provider_id: 1, provider_service_id: '1160', service_name: 'TikTok Viral Direct Shares', rate_per_k: 0.35 }
     ];
 
-    const existingRows = query(
+    let existingRows = query(
       `SELECT m.*, p.name as provider_name, p.slug as provider_slug
        FROM user_service_mappings m
        LEFT JOIN api_providers p ON m.provider_id = p.id
        WHERE m.user_id = ?`,
       [req.user.id]
     );
+
+    if (existingRows.length === 0) {
+      try { await pullFromCloud(true); } catch (_) {}
+      existingRows = query(
+        `SELECT m.*, p.name as provider_name, p.slug as provider_slug
+         FROM user_service_mappings m
+         LEFT JOIN api_providers p ON m.provider_id = p.id
+         WHERE m.user_id = ?`,
+        [req.user.id]
+      );
+    }
 
     const nowIso = new Date().toISOString();
     const existingTypeSet = new Set(existingRows.map(r => r.service_type));
@@ -297,7 +311,7 @@ router.get('/user-mappings', authenticate, (req, res) => {
  * POST /api/services/user-mappings
  * Update or assign a service to an engagement automation slot
  */
-router.post('/user-mappings', authenticate, (req, res) => {
+router.post('/user-mappings', authenticate, async (req, res) => {
   try {
     const {
       serviceType,
@@ -362,6 +376,10 @@ router.post('/user-mappings', authenticate, (req, res) => {
 
     logAudit(req.user.id, 'UPDATE_AUTOMATION_SLOT', 'user_service_mappings', typeLower, { providerId, providerServiceId, serviceName, isEnabled }, req);
 
+    try {
+      await pushToCloud();
+    } catch (_) {}
+
     return res.json({
       success: true,
       message: `Assigned ${serviceName || providerServiceId} to ${typeLower.toUpperCase()} automation slot.`
@@ -376,7 +394,7 @@ router.post('/user-mappings', authenticate, (req, res) => {
  * POST /api/services/user-mappings/toggle
  * Toggle slot enabled/disabled
  */
-router.post('/user-mappings/toggle', authenticate, (req, res) => {
+router.post('/user-mappings/toggle', authenticate, async (req, res) => {
   try {
     const { serviceType, isEnabled } = req.body;
     if (!serviceType) {
@@ -388,6 +406,10 @@ router.post('/user-mappings/toggle', authenticate, (req, res) => {
       'UPDATE user_service_mappings SET is_enabled = ?, updated_at = ? WHERE user_id = ? AND service_type = ?',
       [isEnabled ? 1 : 0, nowIso, req.user.id, serviceType.toLowerCase()]
     );
+
+    try {
+      await pushToCloud();
+    } catch (_) {}
 
     return res.json({
       success: true,

@@ -4,6 +4,7 @@ const { queryOne, run, transaction } = require('../db');
 const { decryptText } = require('../config/security');
 const { getProviderAdapter } = require('./apiAdapter');
 const { sendNotification } = require('./notificationService');
+const { pullFromCloud } = require('./cloudSync');
 
 /**
  * Validate URL strictly
@@ -65,56 +66,73 @@ async function createOrder({
 
   // 4. Resolve Provider, Service ID, and API Credentials
   // Prefer user's configured mapping in user_service_mappings, or user's connected provider
-  let provider = queryOne('SELECT * FROM api_providers WHERE id = ?', [service.provider_id]);
-  let providerServiceId = service.provider_service_id;
-
   const serviceCategory = (service.category || 'views').toLowerCase();
   const serviceType = serviceCategory.includes('like') ? 'likes' : (serviceCategory.includes('save') ? 'saves' : (serviceCategory.includes('share') ? 'shares' : 'views'));
 
-  // A. Check if user has an explicit mapping for this service type
-  const userMapping = queryOne(
-    "SELECT * FROM user_service_mappings WHERE user_id = ? AND service_type = ? AND is_enabled = 1",
-    [userId, serviceType]
-  );
+  // Function to resolve provider and credentials
+  function resolveProviderAndCredentials() {
+    let resolvedProvider = queryOne('SELECT * FROM api_providers WHERE id = ?', [service.provider_id]);
+    let resolvedServiceId = service.provider_service_id;
+    let resolvedCred = null;
 
-  let userCred = null;
-
-  if (userMapping) {
-    const mappedCred = queryOne(
-      'SELECT * FROM user_api_credentials WHERE user_id = ? AND provider_id = ? AND connection_status = "CONNECTED"',
-      [userId, userMapping.provider_id]
+    // A. Check if user has an explicit mapping for this service type
+    const mapping = queryOne(
+      "SELECT * FROM user_service_mappings WHERE user_id = ? AND service_type = ? AND is_enabled = 1",
+      [userId, serviceType]
     );
-    if (mappedCred) {
-      const mappedProvider = queryOne('SELECT * FROM api_providers WHERE id = ? AND is_active = 1', [userMapping.provider_id]);
-      if (mappedProvider) {
-        provider = mappedProvider;
-        providerServiceId = userMapping.provider_service_id || providerServiceId;
-        userCred = mappedCred;
+
+    if (mapping) {
+      const mappedCred = queryOne(
+        'SELECT * FROM user_api_credentials WHERE user_id = ? AND provider_id = ? AND connection_status = "CONNECTED"',
+        [userId, mapping.provider_id]
+      );
+      if (mappedCred) {
+        const mappedProvider = queryOne('SELECT * FROM api_providers WHERE id = ? AND is_active = 1', [mapping.provider_id]);
+        if (mappedProvider) {
+          resolvedProvider = mappedProvider;
+          resolvedServiceId = mapping.provider_service_id || resolvedServiceId;
+          resolvedCred = mappedCred;
+        }
       }
     }
+
+    // B. Check credentials for default service provider
+    if (!resolvedCred && resolvedProvider) {
+      resolvedCred = queryOne(
+        'SELECT * FROM user_api_credentials WHERE user_id = ? AND provider_id = ? AND connection_status = "CONNECTED"',
+        [userId, resolvedProvider.id]
+      );
+    }
+
+    // C. Fallback: If user has ANY connected credential
+    if (!resolvedCred) {
+      const anyCred = queryOne(
+        'SELECT * FROM user_api_credentials WHERE user_id = ? AND connection_status = "CONNECTED" ORDER BY id DESC LIMIT 1',
+        [userId]
+      );
+      if (anyCred) {
+        const anyProvider = queryOne('SELECT * FROM api_providers WHERE id = ? AND is_active = 1', [anyCred.provider_id]);
+        if (anyProvider) {
+          resolvedProvider = anyProvider;
+          resolvedCred = anyCred;
+        }
+      }
+    }
+
+    return { resolvedProvider, resolvedServiceId, resolvedCred };
   }
 
-  // B. If not resolved from mapping, check credentials for default service provider
-  if (!userCred && provider) {
-    userCred = queryOne(
-      'SELECT * FROM user_api_credentials WHERE user_id = ? AND provider_id = ? AND connection_status = "CONNECTED"',
-      [userId, provider.id]
-    );
-  }
+  let { resolvedProvider: provider, resolvedServiceId: providerServiceId, resolvedCred: userCred } = resolveProviderAndCredentials();
 
-  // C. Fallback: If user has ANY connected credential and the default provider is not connected:
+  // If credentials or custom provider not found locally (common on cold Vercel lambdas), pull from cloud and re-resolve
   if (!userCred) {
-    const anyCred = queryOne(
-      'SELECT * FROM user_api_credentials WHERE user_id = ? AND connection_status = "CONNECTED" ORDER BY id DESC LIMIT 1',
-      [userId]
-    );
-    if (anyCred) {
-      const anyProvider = queryOne('SELECT * FROM api_providers WHERE id = ? AND is_active = 1', [anyCred.provider_id]);
-      if (anyProvider) {
-        provider = anyProvider;
-        userCred = anyCred;
-      }
-    }
+    try {
+      await pullFromCloud(true);
+      const reResolved = resolveProviderAndCredentials();
+      provider = reResolved.resolvedProvider;
+      providerServiceId = reResolved.resolvedServiceId;
+      userCred = reResolved.resolvedCred;
+    } catch (_) {}
   }
 
   if (!provider || !provider.is_active) {

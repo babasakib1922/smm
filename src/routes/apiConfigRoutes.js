@@ -5,6 +5,7 @@ const { authenticate, requireRole } = require('../middleware/auth');
 const { encryptText, decryptText, maskApiKey } = require('../config/security');
 const { getProviderAdapter } = require('../services/apiAdapter');
 const { logAudit } = require('../middleware/auditLog');
+const { pullFromCloud, pushToCloud } = require('../services/cloudSync');
 
 /**
  * GET /api/api-configs/balance
@@ -12,14 +13,28 @@ const { logAudit } = require('../middleware/auditLog');
  */
 router.get('/balance', authenticate, async (req, res) => {
   try {
-    const cred = queryOne(
+    try { await pullFromCloud(); } catch (_) {}
+
+    let cred = queryOne(
       `SELECT c.*, p.name as provider_name, p.slug, p.adapter_type, p.api_url as default_url
        FROM user_api_credentials c
-       JOIN api_providers p ON c.provider_id = p.id
+       LEFT JOIN api_providers p ON c.provider_id = p.id
        WHERE c.user_id = ? AND c.connection_status = 'CONNECTED'
        ORDER BY c.id DESC LIMIT 1`,
       [req.user.id]
     );
+
+    if (!cred) {
+      try { await pullFromCloud(true); } catch (_) {}
+      cred = queryOne(
+        `SELECT c.*, p.name as provider_name, p.slug, p.adapter_type, p.api_url as default_url
+         FROM user_api_credentials c
+         LEFT JOIN api_providers p ON c.provider_id = p.id
+         WHERE c.user_id = ? AND c.connection_status = 'CONNECTED'
+         ORDER BY c.id DESC LIMIT 1`,
+        [req.user.id]
+      );
+    }
 
     if (!cred) {
       return res.json({
@@ -71,13 +86,22 @@ router.get('/balance', authenticate, async (req, res) => {
  * GET /api/api-configs/providers
  * List available API providers
  */
-router.get('/providers', authenticate, (req, res) => {
+router.get('/providers', authenticate, async (req, res) => {
   try {
-    const providers = query(
+    try { await pullFromCloud(); } catch (_) {}
+    let providers = query(
       `SELECT id, name, slug, api_url, adapter_type, is_active, description, created_at
        FROM api_providers
        ORDER BY id ASC`
     );
+    if (providers.length <= 3) {
+      try { await pullFromCloud(true); } catch (_) {}
+      providers = query(
+        `SELECT id, name, slug, api_url, adapter_type, is_active, description, created_at
+         FROM api_providers
+         ORDER BY id ASC`
+      );
+    }
     return res.json({ success: true, providers });
   } catch (err) {
     console.error('List providers error:', err);
@@ -89,18 +113,33 @@ router.get('/providers', authenticate, (req, res) => {
  * GET /api/api-configs/user-credentials
  * List current user's connected API credentials (with masked keys)
  */
-router.get('/user-credentials', authenticate, (req, res) => {
+router.get('/user-credentials', authenticate, async (req, res) => {
   try {
-    const credentials = query(
+    try { await pullFromCloud(); } catch (_) {}
+    let credentials = query(
       `SELECT c.id, c.provider_id, p.name as provider_name, p.slug, p.api_url as default_endpoint,
               c.masked_key, c.api_endpoint, c.connection_status, c.last_checked_at,
               c.last_error, c.reported_balance
        FROM user_api_credentials c
-       JOIN api_providers p ON c.provider_id = p.id
+       LEFT JOIN api_providers p ON c.provider_id = p.id
        WHERE c.user_id = ?
        ORDER BY c.id ASC`,
       [req.user.id]
     );
+
+    if (credentials.length === 0) {
+      try { await pullFromCloud(true); } catch (_) {}
+      credentials = query(
+        `SELECT c.id, c.provider_id, p.name as provider_name, p.slug, p.api_url as default_endpoint,
+                c.masked_key, c.api_endpoint, c.connection_status, c.last_checked_at,
+                c.last_error, c.reported_balance
+         FROM user_api_credentials c
+         LEFT JOIN api_providers p ON c.provider_id = p.id
+         WHERE c.user_id = ?
+         ORDER BY c.id ASC`,
+        [req.user.id]
+      );
+    }
 
     return res.json({ success: true, credentials });
   } catch (err) {
@@ -183,6 +222,10 @@ router.post('/user-credentials', authenticate, async (req, res) => {
     }
 
     logAudit(req.user.id, 'SAVE_API_CREDENTIAL', 'user_api_credentials', provider.id, { providerName: provider.name, status }, req);
+
+    try {
+      await pushToCloud();
+    } catch (_) {}
 
     return res.json({
       success: true,

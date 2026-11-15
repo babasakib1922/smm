@@ -154,12 +154,12 @@ async function pullFromCloud(force = false) {
       for (const cr of credentials) {
         run(
           `INSERT OR REPLACE INTO user_api_credentials
-           (id, user_id, provider_id, encrypted_api_key, iv, auth_tag, masked_key, api_endpoint, connection_status, last_checked_at, last_error, reported_balance, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, user_id, provider_id, encrypted_api_key, iv, auth_tag, masked_key, api_endpoint, connection_status, last_checked_at, last_error, reported_balance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             cr.id, cr.user_id, cr.provider_id, cr.encrypted_api_key, cr.iv, cr.auth_tag,
             cr.masked_key, cr.api_endpoint, cr.connection_status, cr.last_checked_at,
-            cr.last_error, cr.reported_balance, cr.created_at, cr.updated_at
+            cr.last_error, cr.reported_balance
           ]
         );
       }
@@ -167,11 +167,14 @@ async function pullFromCloud(force = false) {
       for (const m of mappings) {
         run(
           `INSERT OR REPLACE INTO user_service_mappings
-           (id, user_id, service_type, is_enabled, provider_id, provider_service_id, service_name, rate_per_k, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, user_id, service_type, is_enabled, provider_id, provider_service_id, service_name, rate_per_k, min_quantity, max_quantity, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             m.id, m.user_id, m.service_type, m.is_enabled, m.provider_id,
-            m.provider_service_id, m.service_name, m.rate_per_k, m.created_at, m.updated_at
+            m.provider_service_id, m.service_name, m.rate_per_k,
+            m.min_quantity !== undefined ? m.min_quantity : 10,
+            m.max_quantity !== undefined ? m.max_quantity : 100000,
+            m.updated_at || new Date().toISOString()
           ]
         );
       }
@@ -179,7 +182,7 @@ async function pullFromCloud(force = false) {
 
     lastPullTime = Date.now();
   } catch (err) {
-    // Non-blocking in offline or sandbox mode
+    console.error('[CloudSync Pull Error]', err.message);
   }
 }
 
@@ -216,8 +219,8 @@ async function pushToCloud() {
     if (orders.length > 0) {
       filesToPatch['orders.json'] = { content: JSON.stringify(ordersPayload, null, 2) };
     }
-    // Only push credentials if local has credentials or custom providers, so a blank cold container never wipes out credentials
-    if (credentials.length > 0 || providers.length > 3) {
+    // Only push credentials if local has credentials or mappings, so a blank cold container never wipes out credentials
+    if (credentials.length > 0 || mappings.length > 0) {
       filesToPatch['credentials.json'] = { content: JSON.stringify(credentialsPayload, null, 2) };
     }
 
