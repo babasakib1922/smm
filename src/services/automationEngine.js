@@ -215,7 +215,13 @@ async function runWorkerB() {
     );
 
     for (const batch of dueBatches) {
-      const executionId = `EXEC-${batch.id}-${Date.now()}`;
+      if (batch.provider_order_id) {
+        console.warn(`[Worker B] Batch ${batch.id} already has provider order #${batch.provider_order_id}. Marking Delivered.`);
+        run(`UPDATE campaign_batches SET status = 'Delivered' WHERE id = ?`, [batch.id]);
+        continue;
+      }
+
+      const executionId = `EXEC-${batch.id}`;
 
       // CRITICAL DUPLICATE PROTECTION: Atomic status transition
       // Only one worker process can successfully transition this batch from 'Scheduled' to 'Processing'
