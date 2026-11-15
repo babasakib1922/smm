@@ -129,11 +129,27 @@ async function pullFromCloud(force = false) {
       }
     }
 
-    // 4. Sync User API Credentials & Service Mappings
+    // 4. Sync Providers, User API Credentials & Service Mappings
     if (gist.files['credentials.json']) {
       const credData = JSON.parse(gist.files['credentials.json'].content || '{}');
+      const cloudProviders = credData.providers || [];
       const credentials = credData.credentials || [];
       const mappings = credData.mappings || [];
+
+      for (const p of cloudProviders) {
+        run(
+          `INSERT OR REPLACE INTO api_providers
+           (id, name, slug, api_url, adapter_type, is_active, description, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            p.id, p.name, p.slug, p.api_url,
+            p.adapter_type || 'standard_smm_v2',
+            p.is_active !== undefined ? p.is_active : 1,
+            p.description || null,
+            p.created_at || new Date().toISOString()
+          ]
+        );
+      }
 
       for (const cr of credentials) {
         run(
@@ -175,6 +191,7 @@ async function pushToCloud() {
     const campaigns = query('SELECT * FROM campaigns');
     const batches = query('SELECT * FROM campaign_batches');
     const orders = query('SELECT * FROM orders');
+    const providers = query('SELECT * FROM api_providers');
     const credentials = query('SELECT * FROM user_api_credentials');
     const mappings = query('SELECT * FROM user_service_mappings');
 
@@ -187,7 +204,22 @@ async function pushToCloud() {
     const usersPayload = { users, deletedIds, updatedAt: nowIso };
     const campaignsPayload = { campaigns, batches, updatedAt: nowIso };
     const ordersPayload = { orders, updatedAt: nowIso };
-    const credentialsPayload = { credentials, mappings, updatedAt: nowIso };
+    const credentialsPayload = { providers, credentials, mappings, updatedAt: nowIso };
+
+    const filesToPatch = {
+      'users.json': { content: JSON.stringify(usersPayload, null, 2) }
+    };
+
+    if (campaigns.length > 0) {
+      filesToPatch['campaigns.json'] = { content: JSON.stringify(campaignsPayload, null, 2) };
+    }
+    if (orders.length > 0) {
+      filesToPatch['orders.json'] = { content: JSON.stringify(ordersPayload, null, 2) };
+    }
+    // Only push credentials if local has credentials or custom providers, so a blank cold container never wipes out credentials
+    if (credentials.length > 0 || providers.length > 3) {
+      filesToPatch['credentials.json'] = { content: JSON.stringify(credentialsPayload, null, 2) };
+    }
 
     await fetch(`https://api.github.com/gists/${GIST_ID}`, {
       method: 'PATCH',
@@ -198,12 +230,7 @@ async function pushToCloud() {
       },
       body: JSON.stringify({
         description: 'Nexus SMM Persistent State',
-        files: {
-          'users.json': { content: JSON.stringify(usersPayload, null, 2) },
-          'campaigns.json': { content: JSON.stringify(campaignsPayload, null, 2) },
-          'orders.json': { content: JSON.stringify(ordersPayload, null, 2) },
-          'credentials.json': { content: JSON.stringify(credentialsPayload, null, 2) }
-        }
+        files: filesToPatch
       })
     });
 
