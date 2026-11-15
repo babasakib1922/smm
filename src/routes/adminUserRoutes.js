@@ -80,14 +80,6 @@ router.get('/', async (req, res) => {
     return res.status(500).json({ success: false, error: 'Failed to retrieve users.' });
   }
 });
-        limit: parseInt(limit, 10)
-      }
-    });
-  } catch (err) {
-    console.error('Admin list users error:', err);
-    return res.status(500).json({ success: false, error: 'Failed to retrieve users.' });
-  }
-});
 
 /**
  * GET /api/admin/users/:id
