@@ -12,6 +12,12 @@
       }
     }
   ],
+  "crons": [
+    {
+      "path": "/api/scheduler/cron",
+      "schedule": "* * * * *"
+    }
+  ],
   "routes": [
     {
       "src": "/(.*)",

@@ -15,6 +15,23 @@ const { pullFromCloud, pushToCloud } = require('../services/cloudSync');
 const { runWorkerA, runWorkerB } = require('../services/automationEngine');
 
 /**
+ * GET /api/scheduler/cron
+ * Lightweight background heartbeat to process due batches automatically
+ * Callable by Vercel Cron, external monitors (cron-job.org / uptimerobot), or frontend interval
+ */
+router.get('/cron', async (req, res) => {
+  try {
+    await pullFromCloud();
+    await runWorkerA();
+    await runWorkerB();
+    await pushToCloud();
+    return res.json({ success: true, timestamp: new Date().toISOString(), message: 'Cron execution completed.' });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/scheduler/packages
  * Get all available configured packages
  */

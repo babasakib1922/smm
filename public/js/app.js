@@ -90,6 +90,10 @@ window.App = {
   },
 
   showLogin(message = null) {
+    if (this._heartbeatInterval) {
+      clearInterval(this._heartbeatInterval);
+      this._heartbeatInterval = null;
+    }
     document.getElementById('login-screen').classList.add('active');
     document.getElementById('app-container').style.display = 'none';
     if (message) {
@@ -100,6 +104,17 @@ window.App = {
   showApp() {
     document.getElementById('login-screen').classList.remove('active');
     document.getElementById('app-container').style.display = 'flex';
+
+    // Start background scheduler heartbeat (ticks every 30 seconds to trigger due batches automatically)
+    if (!this._heartbeatInterval) {
+      this._heartbeatInterval = setInterval(async () => {
+        if (API.getToken()) {
+          try {
+            await fetch('/api/scheduler/cron').catch(() => {});
+          } catch (_) {}
+        }
+      }, 30000);
+    }
 
     // Update Header
     document.getElementById('nav-username').textContent = this.user.username;
