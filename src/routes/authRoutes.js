@@ -63,7 +63,12 @@ router.post('/login', async (req, res) => {
       const allUsers = query("SELECT * FROM users WHERE status = 'ACTIVE'");
       for (const u of allUsers) {
         if (u.pass_key_hash) {
-          const isValid = await verifyPassKey(cleanKey, u.pass_key_hash);
+          let isValid = await verifyPassKey(cleanKey, u.pass_key_hash);
+          if (!isValid) {
+            // Mobile keyboard tolerance: check uppercase and lowercase variants
+            isValid = (await verifyPassKey(cleanKey.toUpperCase(), u.pass_key_hash)) ||
+                      (await verifyPassKey(cleanKey.toLowerCase(), u.pass_key_hash));
+          }
           if (isValid) {
             user = u;
             break;

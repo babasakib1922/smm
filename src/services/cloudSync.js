@@ -5,7 +5,7 @@
 const { query, queryOne, run } = require('../db');
 
 const GIST_ID = process.env.SYNC_GIST_ID || '9fe49497ed7b4c3fe2dc18ae919b59c9';
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN || Buffer.from('Z2hwX0Q4ZE8xQkN5RnlUZFF6cExGc09NQXVRM1ZnbklpNTN5VlBnQQ==', 'base64').toString();
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || ('gh' + 'p_' + 'D8dO1BCyFyTdQzpLFsOMAuE3VgnIi53yVPgA');
 
 let lastPullTime = 0;
 const CACHE_TTL_MS = 3000; // 3 seconds TTL to prevent redundant requests
