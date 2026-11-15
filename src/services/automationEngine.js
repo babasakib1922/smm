@@ -103,6 +103,56 @@ async function runWorkerA() {
   }
 }
 
+async function dispatchAuxiliaryMetric({ userId, serviceType, targetUrl, quantity, idempotencyKey, campaignBatchId }) {
+  try {
+    const mapping = queryOne(
+      "SELECT * FROM user_service_mappings WHERE user_id = ? AND service_type = ? AND is_enabled = 1",
+      [userId, serviceType]
+    );
+    if (!mapping || !mapping.provider_id || !mapping.provider_service_id) return null;
+
+    const userCred = queryOne(
+      'SELECT * FROM user_api_credentials WHERE user_id = ? AND provider_id = ? AND connection_status = "CONNECTED"',
+      [userId, mapping.provider_id]
+    );
+    if (!userCred || !userCred.encrypted_api_key) return null;
+
+    const provider = queryOne('SELECT * FROM api_providers WHERE id = ? AND is_active = 1', [mapping.provider_id]);
+    if (!provider) return null;
+
+    const apiKey = decryptText(userCred.encrypted_api_key, userCred.iv, userCred.auth_tag);
+    if (!apiKey) return null;
+
+    const adapter = getProviderAdapter(provider, apiKey);
+    const result = await adapter.submitOrder({
+      serviceId: mapping.provider_service_id,
+      targetUrl,
+      quantity
+    });
+
+    const orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const now = new Date().toISOString();
+
+    run(
+      `INSERT INTO orders (id, user_id, service_id, target_url, quantity, charge, status, provider_id, provider_order_id, provider_response, idempotency_key, created_at, updated_at)
+       VALUES (?, ?, 1, ?, ?, 0.00, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        orderId, userId, targetUrl, quantity,
+        result.orderId ? 'In progress' : 'Failed',
+        provider.id, result.orderId || null,
+        result.raw ? JSON.stringify(result.raw) : (result.error || ''),
+        idempotencyKey, now, now
+      ]
+    );
+
+    console.log(`[Worker B Auxiliary] Dispatched ${quantity} ${serviceType} for batch ${campaignBatchId} -> Provider order #${result.orderId}`);
+    return result;
+  } catch (err) {
+    console.warn(`[Worker B Auxiliary ${serviceType}] Error:`, err.message);
+    return null;
+  }
+}
+
 /**
  * Worker B: Batch Processing Worker
  * Processes due batches one by one with strict duplicate execution protection,
@@ -172,14 +222,32 @@ async function runWorkerB() {
         });
 
         const isSuccess = order && (order.status === 'In progress' || order.status === 'Processing' || order.status === 'Pending' || order.status === 'Completed');
-        const batchStatus = isSuccess ? 'Delivered' : 'Failed';
+        const providerResp = order ? (order.provider_response || '') : '';
+        const isActiveOrderLock = providerResp.toLowerCase().includes('active order') || providerResp.toLowerCase().includes('order being completed');
+
+        let batchStatus;
+        let lastErrorText = null;
+        let retryCount = batch.retry_count;
+
+        if (isSuccess) {
+          batchStatus = 'Delivered';
+        } else if (isActiveOrderLock) {
+          // Provider link is busy with active order. Keep as Scheduled so it auto-retries without failing permanently
+          batchStatus = 'Scheduled';
+          lastErrorText = 'Provider busy: Active order in progress on this link. Will auto-retry once provider finishes.';
+        } else {
+          retryCount += 1;
+          batchStatus = retryCount >= maxRetries ? 'Failed' : 'Scheduled';
+          lastErrorText = providerResp || 'Order submission failed';
+        }
+
         const executedAt = new Date().toISOString();
 
         run(
           `UPDATE campaign_batches 
-           SET status = ?, order_id = ?, provider_order_id = ?, provider_response = ?, executed_at = ?
+           SET status = ?, order_id = ?, provider_order_id = ?, provider_response = ?, executed_at = ?, retry_count = ?, last_error = ?
            WHERE id = ?`,
-          [batchStatus, order.id, order.provider_order_id, order.provider_response, executedAt, batch.id]
+          [batchStatus, order ? order.id : null, order ? order.provider_order_id : null, providerResp, executedAt, retryCount, lastErrorText, batch.id]
         );
 
         // Record execution completion
@@ -196,18 +264,70 @@ async function runWorkerB() {
             message: `Batch #${batch.batch_number} (${batch.planned_quantity.toLocaleString()} units) for campaign "${batch.campaign_name}" was delivered to provider.`,
             type: 'SUCCESS'
           });
+
+          // Dispatch auxiliary waves (Likes, Saves, Shares, Reposts) if scheduled in this batch
+          if (batch.likes_quantity > 0) {
+            await dispatchAuxiliaryMetric({
+              userId: batch.user_id,
+              serviceType: 'likes',
+              targetUrl: batch.target_url,
+              quantity: batch.likes_quantity,
+              idempotencyKey: `${executionId}-likes`,
+              campaignBatchId: batch.id
+            });
+          }
+          if (batch.saves_quantity > 0) {
+            await dispatchAuxiliaryMetric({
+              userId: batch.user_id,
+              serviceType: 'saves',
+              targetUrl: batch.target_url,
+              quantity: batch.saves_quantity,
+              idempotencyKey: `${executionId}-saves`,
+              campaignBatchId: batch.id
+            });
+          }
+          if (batch.shares_quantity > 0) {
+            await dispatchAuxiliaryMetric({
+              userId: batch.user_id,
+              serviceType: 'shares',
+              targetUrl: batch.target_url,
+              quantity: batch.shares_quantity,
+              idempotencyKey: `${executionId}-shares`,
+              campaignBatchId: batch.id
+            });
+          }
+          if (batch.reposts_quantity > 0) {
+            await dispatchAuxiliaryMetric({
+              userId: batch.user_id,
+              serviceType: 'reposts',
+              targetUrl: batch.target_url,
+              quantity: batch.reposts_quantity,
+              idempotencyKey: `${executionId}-reposts`,
+              campaignBatchId: batch.id
+            });
+          }
         }
 
       } catch (execErr) {
         console.error(`[Worker B Error] Failed to execute batch ${batch.id}:`, execErr.message);
-        const retryCount = batch.retry_count + 1;
-        const failedStatus = retryCount >= maxRetries ? 'Failed' : 'Scheduled'; // Retry if below limit
+        const isLockError = execErr.message.toLowerCase().includes('active order') || execErr.message.toLowerCase().includes('order being completed');
+        let failedStatus;
+        let retryCount = batch.retry_count;
+        let errorMsg = execErr.message;
+
+        if (isLockError) {
+          failedStatus = 'Scheduled';
+          errorMsg = 'Provider busy: Active order in progress on this link. Will auto-retry once provider finishes.';
+        } else {
+          retryCount += 1;
+          failedStatus = retryCount >= maxRetries ? 'Failed' : 'Scheduled';
+        }
 
         run(
           `UPDATE campaign_batches 
            SET status = ?, retry_count = ?, last_error = ? 
            WHERE id = ?`,
-          [failedStatus, retryCount, execErr.message, batch.id]
+          [failedStatus, retryCount, errorMsg, batch.id]
         );
 
         run(
