@@ -90,7 +90,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Automation cron endpoint (callable by Vercel Cron or external monitors)
-app.get(['/api/cron', '/api/scheduler/cron'], async (req, res) => {
+app.get('/api/cron', async (req, res) => {
   try {
     const { pullFromCloud, pushToCloud } = require('./services/cloudSync');
     const { runWorkerA, runWorkerB } = require('./services/automationEngine');
