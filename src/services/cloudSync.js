@@ -42,33 +42,32 @@ async function pullFromCloud(force = false) {
     for (const u of cloudUsers) {
       if (deletedIds.includes(u.id)) continue;
 
-      const existing = queryOne('SELECT id FROM users WHERE id = ? OR username = ?', [u.id, u.username]);
-      if (!existing) {
-        run(
-          `INSERT INTO users (id, username, telegram_username, email, pass_key_hash, role, balance, status, is_protected_admin, expires_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            u.id,
-            u.username,
-            u.telegram_username || null,
-            u.email || `${u.username}@portal.internal`,
-            u.pass_key_hash,
-            u.role || 'USER',
-            u.balance || 0,
-            u.status || 'ACTIVE',
-            u.role === 'ADMIN' ? 1 : 0,
-            u.expires_at || null,
-            u.created_at || new Date().toISOString()
-          ]
-        );
-      } else {
-        run(
-          `UPDATE users 
-           SET pass_key_hash = ?, telegram_username = ?, expires_at = ?, status = ?, balance = ?
-           WHERE id = ?`,
-          [u.pass_key_hash, u.telegram_username || null, u.expires_at || null, u.status || 'ACTIVE', u.balance || 0, existing.id]
-        );
+      const existingById = queryOne('SELECT id, username FROM users WHERE id = ?', [u.id]);
+      const existingByName = queryOne('SELECT id, username FROM users WHERE LOWER(username) = ?', [u.username.toLowerCase()]);
+
+      if (existingById && existingByName && existingById.id !== existingByName.id) {
+        if (existingByName.id !== 1) {
+          run('DELETE FROM users WHERE id = ?', [existingByName.id]);
+        }
       }
+
+      run(
+        `INSERT OR REPLACE INTO users (id, username, telegram_username, email, pass_key_hash, role, balance, status, is_protected_admin, expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          u.id,
+          u.username,
+          u.telegram_username || null,
+          u.email || `${u.username.toLowerCase()}@telegram.internal`,
+          u.pass_key_hash,
+          u.role || 'USER',
+          u.balance || 0,
+          u.status || 'ACTIVE',
+          u.role === 'ADMIN' ? 1 : 0,
+          u.expires_at || null,
+          u.created_at || new Date().toISOString()
+        ]
+      );
     }
 
     lastPullTime = Date.now();

@@ -34,6 +34,12 @@ async function ensureDbReady() {
       await initDB();
       console.log('[Server] Checking and seeding default records...');
       await seedData();
+      try {
+        const { pullFromCloud } = require('./services/cloudSync');
+        await pullFromCloud(true);
+      } catch (err) {
+        // Non-blocking in offline / test environments
+      }
       isDbReady = true;
     })();
   }

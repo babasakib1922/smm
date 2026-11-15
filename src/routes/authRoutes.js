@@ -25,8 +25,8 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Pull from cloud state to ensure new keys created in another container are loaded
-    await pullFromCloud();
+    // Force pull from cloud state to ensure new keys created in another container are loaded
+    await pullFromCloud(true);
 
     let user = null;
 
