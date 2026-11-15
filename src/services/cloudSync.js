@@ -99,14 +99,15 @@ async function pullFromCloud(force = false) {
       for (const b of batches) {
         run(
           `INSERT OR REPLACE INTO campaign_batches
-           (id, campaign_id, batch_number, planned_quantity, likes_quantity, saves_quantity, reposts_quantity, shares_quantity, relative_time_minutes, scheduled_at, status, order_id, provider_order_id, provider_response, executed_at, retry_count, last_error)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, campaign_id, batch_number, planned_quantity, likes_quantity, saves_quantity, reposts_quantity, shares_quantity, relative_time_minutes, scheduled_at, status, order_id, provider_order_id, provider_response, executed_at, retry_count, last_error, likes_provider_order_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             b.id, b.campaign_id, b.batch_number, b.planned_quantity,
             b.likes_quantity || 0, b.saves_quantity || 0, b.reposts_quantity || 0, b.shares_quantity || 0,
             b.relative_time_minutes, b.scheduled_at, b.status,
             b.order_id || null, b.provider_order_id || null, b.provider_response || null,
-            b.executed_at || null, b.retry_count || 0, b.last_error || null
+            b.executed_at || null, b.retry_count || 0, b.last_error || null,
+            b.likes_provider_order_id || null
           ]
         );
       }

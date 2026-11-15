@@ -105,47 +105,78 @@ async function runWorkerA() {
 
 async function dispatchAuxiliaryMetric({ userId, serviceType, targetUrl, quantity, idempotencyKey, campaignBatchId }) {
   try {
+    const existing = queryOne('SELECT * FROM orders WHERE idempotency_key = ?', [idempotencyKey]);
+    if (existing) {
+      console.log(`[Worker B Auxiliary] Metric ${serviceType} already dispatched with key ${idempotencyKey}: order ${existing.id}`);
+      return existing;
+    }
+
     const mapping = queryOne(
       "SELECT * FROM user_service_mappings WHERE user_id = ? AND service_type = ? AND is_enabled = 1",
       [userId, serviceType]
     );
-    if (!mapping || !mapping.provider_id || !mapping.provider_service_id) return null;
+    if (!mapping || !mapping.provider_id || !mapping.provider_service_id) {
+      console.warn(`[Worker B Auxiliary] No enabled mapping for ${serviceType} (user ${userId})`);
+      return null;
+    }
 
     const userCred = queryOne(
       'SELECT * FROM user_api_credentials WHERE user_id = ? AND provider_id = ? AND connection_status = "CONNECTED"',
       [userId, mapping.provider_id]
     );
-    if (!userCred || !userCred.encrypted_api_key) return null;
+    if (!userCred || !userCred.encrypted_api_key) {
+      console.warn(`[Worker B Auxiliary] No connected credentials for provider ${mapping.provider_id}`);
+      return null;
+    }
 
     const provider = queryOne('SELECT * FROM api_providers WHERE id = ? AND is_active = 1', [mapping.provider_id]);
-    if (!provider) return null;
+    if (!provider) {
+      console.warn(`[Worker B Auxiliary] Provider ${mapping.provider_id} not found or inactive`);
+      return null;
+    }
 
     const apiKey = decryptText(userCred.encrypted_api_key, userCred.iv, userCred.auth_tag);
     if (!apiKey) return null;
 
     const adapter = getProviderAdapter(provider, apiKey);
-    const result = await adapter.submitOrder({
-      serviceId: mapping.provider_service_id,
-      targetUrl,
-      quantity
-    });
-
     const orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const result = await adapter.createOrder({
+      serviceId: mapping.provider_service_id,
+      link: targetUrl,
+      quantity
+    }, orderId);
+
     const now = new Date().toISOString();
+    const isSuccess = !!result.providerOrderId;
+    const providerOrderId = result.providerOrderId || null;
+    const providerResponse = result.raw ? JSON.stringify(result.raw) : '';
+    const charge = parseFloat(((quantity / 1000) * (mapping.rate_per_k || 0.85)).toFixed(4));
+
+    // Find service ID by category
+    const srv = queryOne("SELECT id FROM services WHERE LOWER(category) LIKE ? LIMIT 1", [`%${serviceType.slice(0, 4)}%`]);
+    const serviceId = srv ? srv.id : 2;
 
     run(
       `INSERT INTO orders (id, user_id, service_id, target_url, quantity, charge, status, provider_id, provider_order_id, provider_response, idempotency_key, created_at, updated_at)
-       VALUES (?, ?, 1, ?, ?, 0.00, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        orderId, userId, targetUrl, quantity,
-        result.orderId ? 'In progress' : 'Failed',
-        provider.id, result.orderId || null,
-        result.raw ? JSON.stringify(result.raw) : (result.error || ''),
+        orderId, userId, serviceId, targetUrl, quantity, charge,
+        isSuccess ? 'In progress' : 'Failed',
+        provider.id, providerOrderId,
+        providerResponse,
         idempotencyKey, now, now
       ]
     );
 
-    console.log(`[Worker B Auxiliary] Dispatched ${quantity} ${serviceType} for batch ${campaignBatchId} -> Provider order #${result.orderId}`);
+    if (campaignBatchId && serviceType === 'likes' && providerOrderId) {
+      run(
+        `UPDATE campaign_batches SET likes_provider_order_id = ? WHERE id = ?`,
+        [providerOrderId, campaignBatchId]
+      );
+    }
+
+    console.log(`[Worker B Auxiliary] Dispatched ${quantity} ${serviceType} for batch ${campaignBatchId} to ${provider.name} -> Order #${providerOrderId}`);
     return result;
   } catch (err) {
     console.warn(`[Worker B Auxiliary ${serviceType}] Error:`, err.message);

@@ -98,6 +98,9 @@ async function initDB() {
     if (!batchCols.some(c => c.name === 'shares_quantity')) {
       dbInstance.run('ALTER TABLE campaign_batches ADD COLUMN shares_quantity INTEGER NOT NULL DEFAULT 0;');
     }
+    if (!batchCols.some(c => c.name === 'likes_provider_order_id')) {
+      dbInstance.run('ALTER TABLE campaign_batches ADD COLUMN likes_provider_order_id TEXT DEFAULT NULL;');
+    }
   } catch (e) {}
 
   try {

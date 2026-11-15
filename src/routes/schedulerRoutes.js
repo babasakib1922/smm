@@ -530,7 +530,7 @@ router.get('/share/:token', async (req, res) => {
     }
 
     const batches = query(
-      `SELECT batch_number, planned_quantity, likes_quantity, saves_quantity, shares_quantity, reposts_quantity, relative_time_minutes, scheduled_at, status
+      `SELECT batch_number, planned_quantity, likes_quantity, saves_quantity, shares_quantity, reposts_quantity, relative_time_minutes, scheduled_at, executed_at, status, provider_order_id, likes_provider_order_id
        FROM campaign_batches WHERE campaign_id = ? ORDER BY batch_number ASC`,
       [campaign.id]
     );

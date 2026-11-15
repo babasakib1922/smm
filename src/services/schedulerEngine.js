@@ -248,7 +248,12 @@ function distributeWaves(totalCount, waveCount, totalBatches, isShuffle = false,
       const j = Math.floor(Math.random() * (i + 1));
       [pool[i], pool[j]] = [pool[j], pool[i]];
     }
-    uniqueBatches = pool.slice(0, actualWaves).sort((a, b) => a - b);
+    uniqueBatches = pool.slice(0, actualWaves);
+    // Guarantee early engagement: ensure first wave begins within first 3 batches
+    if (!uniqueBatches.some(b => b <= 3) && availableBatches.length > 0) {
+      uniqueBatches[0] = Math.min(...availableBatches.slice(0, 2));
+    }
+    uniqueBatches.sort((a, b) => a - b);
   } else {
     // Pick evenly spaced unique indices
     const selectedBatches = [];

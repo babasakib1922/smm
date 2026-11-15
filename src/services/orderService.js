@@ -45,12 +45,23 @@ async function createOrder({
     throw new Error('Selected service is not active or does not exist.');
   }
 
+  // Check if user has an explicit mapping for this service type to use custom limits
+  const serviceCategory = (service.category || 'views').toLowerCase();
+  const serviceType = serviceCategory.includes('like') ? 'likes' : (serviceCategory.includes('save') ? 'saves' : (serviceCategory.includes('share') ? 'shares' : 'views'));
+  const userMapping = queryOne(
+    "SELECT * FROM user_service_mappings WHERE user_id = ? AND service_type = ? AND is_enabled = 1",
+    [userId, serviceType]
+  );
+
+  const effectiveMin = (userMapping && userMapping.min_quantity !== undefined && userMapping.min_quantity !== null) ? userMapping.min_quantity : service.min_quantity;
+  const effectiveMax = (userMapping && userMapping.max_quantity !== undefined && userMapping.max_quantity !== null) ? userMapping.max_quantity : service.max_quantity;
+
   // Check service limits
-  if (parsedQty < service.min_quantity) {
-    throw new Error(`Quantity below minimum limit of ${service.min_quantity.toLocaleString()}.`);
+  if (parsedQty < effectiveMin) {
+    throw new Error(`Quantity below minimum limit of ${effectiveMin.toLocaleString()}.`);
   }
-  if (parsedQty > service.max_quantity) {
-    throw new Error(`Quantity exceeds maximum limit of ${service.max_quantity.toLocaleString()}.`);
+  if (parsedQty > effectiveMax) {
+    throw new Error(`Quantity exceeds maximum limit of ${effectiveMax.toLocaleString()}.`);
   }
 
   // Calculate charge: (quantity / 1000) * price_per_k
@@ -66,8 +77,7 @@ async function createOrder({
 
   // 4. Resolve Provider, Service ID, and API Credentials
   // Prefer user's configured mapping in user_service_mappings, or user's connected provider
-  const serviceCategory = (service.category || 'views').toLowerCase();
-  const serviceType = serviceCategory.includes('like') ? 'likes' : (serviceCategory.includes('save') ? 'saves' : (serviceCategory.includes('share') ? 'shares' : 'views'));
+  // (serviceCategory and serviceType resolved above)
 
   // Function to resolve provider and credentials
   function resolveProviderAndCredentials() {

@@ -970,9 +970,9 @@ window.EngagementComponent = {
               <th>#</th>
               <th>Views</th>
               <th>Engagement Added</th>
-              <th>Scheduled Time</th>
+              <th>Schedule & Dispatched</th>
               <th>Status</th>
-              <th>Provider Order ID</th>
+              <th>Provider Orders</th>
             </tr>
           </thead>
           <tbody>
@@ -989,7 +989,10 @@ window.EngagementComponent = {
                     ${(!b.likes_quantity && !b.saves_quantity && !b.shares_quantity && !b.reposts_quantity) ? `<span style="color: var(--text-muted); font-size: 11px;">Views Only</span>` : ''}
                   </div>
                 </td>
-                <td>${new Date(b.scheduled_at).toLocaleTimeString()}</td>
+                <td>
+                  <div><span style="color: var(--text-muted); font-size: 11px;">Sched:</span> <strong>${new Date(b.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</strong></div>
+                  ${b.executed_at ? `<div style="font-size: 11px; color: #10b981; margin-top: 3px; font-weight: 600;">⚡ Sent: ${new Date(b.executed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>` : ''}
+                </td>
                 <td>
                   ${b.status === 'Delivered' ? `<span class="status-pill delivered">Delivered</span>` : ''}
                   ${b.status === 'Processing' ? `<span class="status-pill processing">Processing</span>` : ''}
@@ -999,7 +1002,20 @@ window.EngagementComponent = {
                   ${b.status === 'Cancelled' ? `<span class="status-pill canceled">Cancelled</span>` : ''}
                   ${b.last_error && !b.last_error.toLowerCase().includes('active order') ? `<span title="${b.last_error}" style="color: #ef4444; font-size: 11px; margin-left: 4px; cursor: help;">⚠️ Details</span>` : ''}
                 </td>
-                <td><code style="font-size: 11px;">${b.provider_order_id ? `#${b.provider_order_id}` : (b.last_error && b.last_error.toLowerCase().includes('active order') ? 'Waiting release' : (b.status === 'Failed' ? 'Failed' : 'Queued'))}</code></td>
+                <td>
+                  <div style="display: flex; flex-direction: column; gap: 3px;">
+                    <div>
+                      <span style="font-size: 11px; color: var(--accent-primary); font-weight: 700;">👁️ Views:</span>
+                      <code style="font-size: 11px;">${b.provider_order_id ? `#${b.provider_order_id}` : (b.last_error && b.last_error.toLowerCase().includes('active order') ? 'Waiting release' : (b.status === 'Failed' ? 'Failed' : 'Queued'))}</code>
+                    </div>
+                    ${(b.likes_quantity > 0 || b.likes_provider_order_id) ? `
+                      <div>
+                        <span style="font-size: 11px; color: #ef4444; font-weight: 700;">❤️ Likes:</span>
+                        <code style="font-size: 11px; color: #ef4444;">${b.likes_provider_order_id ? `#${b.likes_provider_order_id}` : (b.status === 'Delivered' ? 'Delivering...' : 'Queued')}</code>
+                      </div>
+                    ` : ''}
+                  </div>
+                </td>
               </tr>
             `).join('')}
           </tbody>
