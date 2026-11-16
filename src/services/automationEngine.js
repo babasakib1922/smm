@@ -116,8 +116,13 @@ async function dispatchAuxiliaryMetric({ userId, serviceType, targetUrl, quantit
   try {
     const existing = queryOne('SELECT * FROM orders WHERE idempotency_key = ?', [idempotencyKey]);
     if (existing) {
-      console.log(`[Worker B Auxiliary] Metric ${serviceType} already dispatched with key ${idempotencyKey}: order ${existing.id}`);
-      return existing;
+      if (existing.status === 'Failed' && !existing.provider_order_id) {
+        console.log(`[Worker B Auxiliary] Previous attempt ${existing.id} failed without provider submission. Re-attempting...`);
+        run('DELETE FROM orders WHERE id = ?', [existing.id]);
+      } else {
+        console.log(`[Worker B Auxiliary] Metric ${serviceType} already dispatched with key ${idempotencyKey}: order ${existing.id}`);
+        return existing;
+      }
     }
 
     const mapping = queryOne(

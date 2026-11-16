@@ -71,8 +71,14 @@ async function createOrder({
   const finalIdempotencyKey = idempotencyKey || `IDEM-${uuidv4()}`;
   const existingOrder = queryOne('SELECT * FROM orders WHERE idempotency_key = ?', [finalIdempotencyKey]);
   if (existingOrder) {
-    console.log(`[Idempotency] Order already processed for key ${finalIdempotencyKey}: ${existingOrder.id}`);
-    return existingOrder;
+    if (existingOrder.status === 'Failed' && !existingOrder.provider_order_id) {
+      console.log(`[Idempotency] Previous order attempt ${existingOrder.id} failed without provider submission. Re-attempting...`);
+      run('UPDATE campaign_batches SET order_id = NULL WHERE order_id = ?', [existingOrder.id]);
+      run('DELETE FROM orders WHERE id = ?', [existingOrder.id]);
+    } else {
+      console.log(`[Idempotency] Order already processed for key ${finalIdempotencyKey}: ${existingOrder.id}`);
+      return existingOrder;
+    }
   }
 
   // 4. Resolve Provider, Service ID, and API Credentials
