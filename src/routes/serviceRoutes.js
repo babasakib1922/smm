@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { query, queryOne, run } = require('../db');
+const { query, queryOne, run, transaction } = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { logAudit } = require('../middleware/auditLog');
 const { decryptText } = require('../config/security');
@@ -460,32 +460,34 @@ router.post('/sync-provider-services', authenticate, async (req, res) => {
           ];
         }
 
-        if (Array.isArray(services)) {
-          for (const s of services) {
-            const sId = String(s.service || s.id || Math.floor(1000 + Math.random() * 9000));
-            const sName = s.name || 'Unnamed SMM Service';
-            const sCategory = s.category || 'General';
-            const sType = s.type || 'Default';
-            const sRate = parseFloat(s.rate || 0);
-            const sMin = parseInt(s.min || 10, 10);
-            const sMax = parseInt(s.max || 100000, 10);
+        if (Array.isArray(services) && services.length > 0) {
+          transaction((tx) => {
+            for (const s of services) {
+              const sId = String(s.service || s.id || Math.floor(1000 + Math.random() * 9000));
+              const sName = s.name || 'Unnamed SMM Service';
+              const sCategory = s.category || 'General';
+              const sType = s.type || 'Default';
+              const sRate = parseFloat(s.rate || 0);
+              const sMin = parseInt(s.min || 10, 10);
+              const sMax = parseInt(s.max || 100000, 10);
 
-            run(
-              `INSERT INTO provider_services_cache 
-               (provider_id, provider_service_id, name, category, type, rate, min_quantity, max_quantity, raw_json, synced_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(provider_id, provider_service_id) DO UPDATE SET
-                 name = excluded.name,
-                 category = excluded.category,
-                 type = excluded.type,
-                 rate = excluded.rate,
-                 min_quantity = excluded.min_quantity,
-                 max_quantity = excluded.max_quantity,
-                 synced_at = excluded.synced_at`,
-              [cred.provider_id, sId, sName, sCategory, sType, sRate, sMin, sMax, JSON.stringify(s), nowIso]
-            );
-            totalSynced++;
-          }
+              tx.run(
+                `INSERT INTO provider_services_cache 
+                 (provider_id, provider_service_id, name, category, type, rate, min_quantity, max_quantity, raw_json, synced_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(provider_id, provider_service_id) DO UPDATE SET
+                   name = excluded.name,
+                   category = excluded.category,
+                   type = excluded.type,
+                   rate = excluded.rate,
+                   min_quantity = excluded.min_quantity,
+                   max_quantity = excluded.max_quantity,
+                   synced_at = excluded.synced_at`,
+                [cred.provider_id, sId, sName, sCategory, sType, sRate, sMin, sMax, JSON.stringify(s), nowIso]
+              );
+              totalSynced++;
+            }
+          });
         }
       } catch (credErr) {
         console.error(`Sync error for provider ${cred.provider_name}:`, credErr.message);
@@ -521,40 +523,26 @@ router.get('/provider-search', authenticate, async (req, res) => {
     );
     const connectedProviderIds = userCreds.map(c => c.provider_id);
 
-    // If user has connected providers, check if any need automatic initial service sync
+    // Fast non-blocking cache check: populate locally from existing services if empty
     for (const cred of userCreds) {
       const cachedCount = queryOne(
         'SELECT COUNT(*) as count FROM provider_services_cache WHERE provider_id = ?',
         [cred.provider_id]
       );
       if (!cachedCount || cachedCount.count === 0) {
-        try {
-          const apiKey = decryptText(cred.encrypted_api_key, cred.iv, cred.auth_tag);
-          const endpoint = cred.api_endpoint || cred.default_endpoint;
-          const adapter = getProviderAdapter({ adapter_type: cred.adapter_type, slug: cred.provider_slug, api_url: endpoint }, apiKey);
-          const liveServices = await adapter.getServices();
-          if (Array.isArray(liveServices) && liveServices.length > 0) {
-            const nowIso = new Date().toISOString();
-            for (const s of liveServices) {
-              const sId = String(s.service || s.id);
-              const sName = s.name || 'Unnamed SMM Service';
-              const sCat = s.category || 'General';
-              const sType = s.type || 'Default';
-              const sRate = parseFloat(s.rate || 0);
-              const sMin = parseInt(s.min || 10, 10);
-              const sMax = parseInt(s.max || 100000, 10);
-              run(
-                `INSERT INTO provider_services_cache 
+        const existingServices = query('SELECT * FROM services WHERE provider_id = ? OR provider_id IS NULL', [cred.provider_id]);
+        const nowIso = new Date().toISOString();
+        if (existingServices && existingServices.length > 0) {
+          transaction((tx) => {
+            for (const s of existingServices) {
+              tx.run(
+                `INSERT OR IGNORE INTO provider_services_cache 
                  (provider_id, provider_service_id, name, category, type, rate, min_quantity, max_quantity, raw_json, synced_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(provider_id, provider_service_id) DO UPDATE SET
-                   name = excluded.name, category = excluded.category, rate = excluded.rate, min_quantity = excluded.min_quantity, max_quantity = excluded.max_quantity, synced_at = excluded.synced_at`,
-                [cred.provider_id, sId, sName, sCat, sType, sRate, sMin, sMax, JSON.stringify(s), nowIso]
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [cred.provider_id, s.provider_service_id || String(s.id), s.name, s.category || 'General', 'Default', s.price_per_k || 0.8, s.min_quantity || 100, s.max_quantity || 100000, JSON.stringify(s), nowIso]
               );
             }
-          }
-        } catch (syncErr) {
-          console.error(`Auto-sync error for provider ${cred.provider_name}:`, syncErr.message);
+          });
         }
       }
     }

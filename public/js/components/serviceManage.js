@@ -14,7 +14,8 @@ window.ServiceManageComponent = {
   isLoading: false,
 
   async render(container) {
-    container.innerHTML = '<div style="text-align: center; padding: 50px; color: var(--text-muted);">Loading Service Management...</div>';
+    this._container = container;
+    container.innerHTML = '<div style="text-align: center; padding: 50px; color: var(--text-muted);"><div class="spinner" style="margin: 0 auto 12px auto;"></div>Loading Service Management...</div>';
 
     await this.loadData();
     this.renderView(container);
@@ -23,15 +24,25 @@ window.ServiceManageComponent = {
   async loadData() {
     this.isLoading = true;
     try {
+      const fetchWithTimeout = (url, ms = 4000) => {
+        return Promise.race([
+          API.get(url),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms))
+        ]).catch(err => {
+          console.warn(`Request to ${url} timed out or failed:`, err.message);
+          return { success: false };
+        });
+      };
+
       const [mapRes, srvRes] = await Promise.all([
-        API.get('/api/services/user-mappings'),
-        API.get(`/api/services/provider-search?q=${encodeURIComponent(this.currentQuery)}&category=${encodeURIComponent(this.currentCategory)}&providerId=${encodeURIComponent(this.currentProviderId)}`)
+        fetchWithTimeout('/api/services/user-mappings'),
+        fetchWithTimeout(`/api/services/provider-search?q=${encodeURIComponent(this.currentQuery)}&category=${encodeURIComponent(this.currentCategory)}&providerId=${encodeURIComponent(this.currentProviderId)}`)
       ]);
 
-      if (mapRes.success) {
+      if (mapRes && mapRes.success) {
         this.mappings = mapRes.mappings || [];
       }
-      if (srvRes.success) {
+      if (srvRes && srvRes.success) {
         this.services = srvRes.services || [];
         this.providers = srvRes.providers || [];
       }
