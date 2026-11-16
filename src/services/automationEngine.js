@@ -211,6 +211,7 @@ async function runWorkerB() {
     const maxRetries = maxRetriesSetting ? parseInt(maxRetriesSetting.value, 10) : 3;
 
     // Find due batches belonging to 'Running' campaigns
+    // Strictly sequential: only process the single lowest-numbered unfinished batch per campaign
     const dueBatches = query(
       `SELECT b.*, c.user_id, c.service_id, c.target_url, c.name as campaign_name
        FROM campaign_batches b
@@ -219,7 +220,13 @@ async function runWorkerB() {
        AND c.status = 'Running'
        AND b.scheduled_at <= ?
        AND b.retry_count <= ?
-       ORDER BY b.scheduled_at ASC LIMIT 10`,
+       AND b.batch_number = (
+         SELECT MIN(b2.batch_number)
+         FROM campaign_batches b2
+         WHERE b2.campaign_id = b.campaign_id
+         AND b2.status IN ('Scheduled', 'Processing')
+       )
+       ORDER BY b.scheduled_at ASC LIMIT 5`,
       [nowIso, maxRetries]
     );
 
@@ -352,6 +359,12 @@ async function runWorkerB() {
               campaignBatchId: batch.id
             });
           }
+
+          // Immediately sync state to cloud so all containers see Delivered status with provider order ID
+          try {
+            const { pushToCloud } = require('./cloudSync');
+            await pushToCloud();
+          } catch (_) {}
         }
 
       } catch (execErr) {

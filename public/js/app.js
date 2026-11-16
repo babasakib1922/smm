@@ -105,7 +105,7 @@ window.App = {
     document.getElementById('login-screen').classList.remove('active');
     document.getElementById('app-container').style.display = 'flex';
 
-    // Start background scheduler heartbeat (ticks every 30 seconds to trigger due batches automatically)
+    // Start background scheduler heartbeat (ticks every 60 seconds to trigger due batches automatically)
     if (!this._heartbeatInterval) {
       this._heartbeatInterval = setInterval(async () => {
         if (API.getToken()) {
@@ -113,7 +113,7 @@ window.App = {
             await fetch('/api/cron').catch(() => {});
           } catch (_) {}
         }
-      }, 30000);
+      }, 60000);
     }
 
     // Update Header
